@@ -189,10 +189,13 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
     <input type="range" id="vol" min="0" max="100" step="1" value="85">
     <output id="volOut">85</output>
   </div>
-  <div class="group" title="Pan left / right (double-click to centre)">
-    <span class="lbl">Pan</span>
+  <div class="group" title="Left / right: slide left to hear only the left channel, right for only the right channel (double-click to centre)">
+    <span class="lbl">L/R</span>
     <input type="range" id="pan" min="-100" max="100" step="1" value="0">
     <output id="panOut">C</output>
+    <button class="btn icon" id="btnBothEars" title="Both ears: play the selected channel in both ears instead of only on its own side">
+      <svg viewBox="0 0 24 24"><path d="M12 3a8 8 0 0 0-8 8v6a3 3 0 0 0 3 3h1v-8H6v-1a6 6 0 0 1 12 0v1h-2v8h1a3 3 0 0 0 3-3v-6a8 8 0 0 0-8-8z"/></svg>
+    </button>
   </div>
   <canvas class="meter" id="meter" title="Level (input while recording, output otherwise)"></canvas>
   <div class="spacer"></div>

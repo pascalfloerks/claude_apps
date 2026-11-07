@@ -25,7 +25,8 @@ Open `loop-catcher/index.html` in Chrome or Edge, or use the standalone Windows 
   and your own saved presets.
 - **Speed trainer** (`P`): starts at e.g. 70 % and raises the speed by a step every N loop passes or N bars until the target.
   At the target it holds, starts over or stops.
-- **Volume and pan** sliders.
+- **Volume** and an **L/R slider**: slide left to hear only the left channel of the recording, right for only the right channel
+  (each stays on its own side). The headphones toggle next to it plays the selected channel in both ears instead.
 - **Metronome** that follows the grid and the playback speed, with an accent on beat 1. It can also play while you record.
 - **Beat detection** (`B`) finds the tempo and the downbeat and lines the grid up with the track. It can run automatically after each recording.
   Correct it with ÷2 / ×2, tap tempo, "Bar 1 here" (`D`), 5 ms nudges, or Alt+drag in the ruler.

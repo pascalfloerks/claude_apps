@@ -12,7 +12,7 @@ const LS_KEY = 'loopcatcher.settings.v1';
 const defaults = {
   srcType: TAURI ? 'loopback' : 'input', inDev: '', loopDev: '', outDev: '', recChannels: 2, sampleRate: 0, latency: 'interactive',
   monitor: false, metroRec: false, detect: true, round: true, returnOnStop: true, stereoView: true,
-  vol: 85, pan: 0, metroVol: 60, pattern: '{name}_{date}_{time}', bits: 24, saveMeta: true, saveDir: '', autoSave: false, counter: 1,
+  vol: 85, pan: 0, panBothEars: false, metroVol: 60, pattern: '{name}_{date}_{time}', bits: 24, saveMeta: true, saveDir: '', autoSave: false, counter: 1,
   division: '0.5', snap: true, showGrid: true, follow: true,
   speedPresets: [], trainer: { start: 70, target: 100, step: 5, every: 2, unit: 'loops', atTarget: 'hold' },
 };
@@ -43,7 +43,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 /* =============================================================================================
    Audio engine
 ============================================================================================= */
-let ctx = null, player = null, musicGain, panner, clickGain, analyser, outLevelBuf;
+let ctx = null, player = null, musicGain, bal, clickGain, analyser, outLevelBuf;
 let playData = null; // channels resampled to the context rate (or S.channels when rates match)
 let audioReady = null;
 
@@ -58,9 +58,13 @@ async function ensureAudio() {
     try { await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: 'text/javascript' }))); }
     catch (e) { await ctx.audioWorklet.addModule('data:text/javascript;charset=utf-8,' + encodeURIComponent(code)); } // file:// pages
     player = new AudioWorkletNode(ctx, 'lc-player', { numberOfInputs: 0, numberOfOutputs: 2, outputChannelCount: [2, 2] });
-    musicGain = ctx.createGain(); panner = ctx.createStereoPanner(); clickGain = ctx.createGain();
+    musicGain = ctx.createGain(); clickGain = ctx.createGain();
+    // Balance: a 2x2 matrix from the track's L/R channels to the L/R outputs (see applyMix)
+    bal = { split: ctx.createChannelSplitter(2), merge: ctx.createChannelMerger(2), LL: ctx.createGain(), LR: ctx.createGain(), RL: ctx.createGain(), RR: ctx.createGain() };
+    bal.split.connect(bal.LL, 0); bal.split.connect(bal.LR, 0); bal.split.connect(bal.RL, 1); bal.split.connect(bal.RR, 1);
+    bal.LL.connect(bal.merge, 0, 0); bal.RL.connect(bal.merge, 0, 0); bal.LR.connect(bal.merge, 0, 1); bal.RR.connect(bal.merge, 0, 1);
     analyser = ctx.createAnalyser(); analyser.fftSize = 2048; outLevelBuf = new Float32Array(analyser.fftSize);
-    player.connect(musicGain, 0); musicGain.connect(panner); panner.connect(analyser); analyser.connect(ctx.destination);
+    player.connect(musicGain, 0); musicGain.connect(bal.split); bal.merge.connect(analyser); analyser.connect(ctx.destination);
     player.connect(clickGain, 1); clickGain.connect(ctx.destination);
     player.port.onmessage = (e) => onPlayerMsg(e.data);
     applyMix();
@@ -86,7 +90,15 @@ function applyMix() {
   if (!ctx) return;
   const t = ctx.currentTime;
   musicGain.gain.setTargetAtTime(Math.pow(settings.vol / 100, 2) * 1.0, t, 0.02);
-  panner.pan.setTargetAtTime(settings.pan / 100, t, 0.02);
+  // p < 0 fades out the right channel, p > 0 the left one.
+  //  default:    the remaining channel stays on its own side (true balance)
+  //  both ears:  the remaining channel moves into both outputs
+  const p = settings.pan / 100, k = Math.abs(p);
+  let LL = 1, LR = 0, RL = 0, RR = 1;
+  if (!settings.panBothEars) { if (p < 0) RR = 1 - k; else LL = 1 - k; }
+  else if (p < 0) { RR = 1 - k; LR = k; }
+  else { LL = 1 - k; RL = k; }
+  for (const [g, v] of [[bal.LL, LL], [bal.LR, LR], [bal.RL, RL], [bal.RR, RR]]) g.gain.setTargetAtTime(v, t, 0.02);
   clickGain.gain.setTargetAtTime(1, t, 0.02);
 }
 
@@ -1893,6 +1905,8 @@ function wire() {
   const panText = (v) => (v === 0 ? 'C' : v < 0 ? `L${-v}` : `R${v}`);
   $('pan').value = settings.pan; $('panOut').textContent = panText(settings.pan);
   $('pan').oninput = (e) => { settings.pan = +e.target.value; $('panOut').textContent = panText(settings.pan); applyMix(); saveSettings(); };
+  $('btnBothEars').classList.toggle('on', settings.panBothEars);
+  $('btnBothEars').onclick = (e) => { settings.panBothEars = !settings.panBothEars; e.currentTarget.classList.toggle('on', settings.panBothEars); applyMix(); saveSettings(); e.currentTarget.blur(); };
   $('pan').ondblclick = () => { settings.pan = 0; $('pan').value = 0; $('panOut').textContent = 'C'; applyMix(); saveSettings(); };
   $('metroVol').value = settings.metroVol;
   $('metroVol').oninput = (e) => { settings.metroVol = +e.target.value; sendMetro(); saveSettings(); };
