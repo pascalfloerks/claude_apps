@@ -1011,14 +1011,18 @@ function resize() {
   DPR = window.devicePixelRatio || 1;
   const r = tl.getBoundingClientRect();
   W = Math.max(50, Math.floor(r.width)); H = Math.max(50, Math.floor(r.height));
-  for (const c of [cvB, cvF]) { c.width = W * DPR; c.height = H * DPR; }
+  for (const c of [cvB, cvF]) { c.width = Math.round(W * DPR); c.height = Math.round(H * DPR); }
   const o = cvO.getBoundingClientRect();
-  cvO.width = Math.floor(o.width * DPR); cvO.height = Math.floor(o.height * DPR);
-  clampView(); dirty = true;
+  cvO.width = Math.round(o.width * DPR); cvO.height = Math.round(o.height * DPR);
+  clampView(); requestDraw();
 }
 const xOf = (t) => (t - S.view.start) / S.view.spp;
 const tOf = (x) => S.view.start + x * S.view.spp;
-function requestDraw() { dirty = true; }
+// Redraw only what changed: the waveform layer and overview when `dirty`, the cursor/hover
+// layer when `fdirty`. The playhead is a DOM line moved with a CSS transform, so playback
+// does not repaint any canvas.
+let fdirty = true;
+function requestDraw() { dirty = true; fdirty = true; }
 
 function clampView() {
   const d = Math.max(dur(), S.recording ? REC.total / REC.sr : 0, 1);
@@ -1320,22 +1324,12 @@ function drawFront() {
   const g = gF;
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
   g.clearRect(0, 0, W, H);
-  if (S.recording) {
-    const x = Math.round(xOf(REC.total / REC.sr)) + 0.5;
-    g.strokeStyle = colors.rec; g.lineWidth = 2; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
-    return;
-  }
-  if (!S.channels) return;
+  if (S.recording || !S.channels) return;
   // edit cursor
   const cx = Math.round(xOf(S.cursor)) + 0.5;
   g.strokeStyle = colors.cursor; g.lineWidth = 1; g.globalAlpha = S.playing ? 0.5 : 1;
   g.beginPath(); g.moveTo(cx, RULER); g.lineTo(cx, H); g.stroke(); g.globalAlpha = 1;
   g.fillStyle = colors.cursor; g.beginPath(); g.moveTo(cx - 6, 0); g.lineTo(cx + 6, 0); g.lineTo(cx, 8); g.closePath(); g.fill();
-  // playhead
-  if (S.playing || scrubbing) {
-    const x = Math.round(xOf(currentPos())) + 0.5;
-    g.strokeStyle = colors.play; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
-  }
   // hover line
   if (hoverX != null && !drag) {
     g.strokeStyle = colors.muted; g.globalAlpha = 0.35; g.lineWidth = 1; g.beginPath(); g.moveTo(hoverX + 0.5, RULER); g.lineTo(hoverX + 0.5, H); g.stroke(); g.globalAlpha = 1;
@@ -1381,14 +1375,13 @@ function drawOverview() {
   // viewport
   const va = S.view.start / total * w, vw = (W * S.view.spp) / total * w;
   g.strokeStyle = colors.accent; g.lineWidth = 1.5; g.strokeRect(va + 0.75, 0.75, Math.max(4, vw) - 1.5, h - 1.5);
-  const px = currentPos() / total * w;
-  g.fillStyle = colors.play; g.fillRect(px, 0, 1.5, h);
 }
 
 function drawMeter(canvas, lv) {
   const g = canvas.getContext('2d');
   const w = canvas.clientWidth, h = canvas.clientHeight;
-  if (canvas.width !== w * DPR) { canvas.width = w * DPR; canvas.height = h * DPR; }
+  const bw = Math.round(w * DPR), bh0 = Math.round(h * DPR);
+  if (canvas.width !== bw || canvas.height !== bh0) { canvas.width = bw; canvas.height = bh0; }
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
   g.clearRect(0, 0, w, h);
   const bh = (h - 6) / 2;
@@ -1402,42 +1395,61 @@ function drawMeter(canvas, lv) {
   }
 }
 
-let meterSmooth = [0, 0];
-let lastFollow = 0;
-function frame() {
+let meterSmooth = [0, 0], meterDrawn = [-1, -1], lastFrame = 0, lastRecDraw = 0;
+const textCache = {};
+function setText(id, t) { if (textCache[id] !== t) { textCache[id] = t; $(id).textContent = t; } }
+const elHead = $('playhead'), elOvHead = $('ovHead');
+function placeLine(el, x, show, color) {
+  if (!show) { if (el.style.display !== 'none') el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.style.transform = `translateX(${Math.round(x * 2) / 2}px)`;
+  if (color && el.dataset.c !== color) { el.dataset.c = color; el.style.background = color; }
+}
+function frame(now) {
+  requestAnimationFrame(frame);
+  // at most ~60 fps, also on 120/144/240 Hz screens
+  if (now - lastFrame < 15) return;
+  lastFrame = now;
   // follow playhead
   if (S.playing && settings.follow && !drag) {
     const x = xOf(currentPos());
-    if (x > W * 0.92 || x < 0) { S.view.start = currentPos() - W * S.view.spp * 0.08; clampView(); dirty = true; }
+    if (x > W * 0.92 || x < 0) { S.view.start = currentPos() - W * S.view.spp * 0.08; clampView(); requestDraw(); }
   }
+  let headT = null, headColor = colors.play;
   if (S.recording) {
-    // keep the whole take visible while it grows
+    // keep the whole take visible while it grows (redrawn ~15 times per second)
     const d = REC.total / REC.sr;
-    S.view.spp = Math.max(d * 1.15, 10) / Math.max(1, W); S.view.start = 0;
-    dirty = true;
-    $('clockTime').textContent = fmtTime(d);
-    $('clockBars').textContent = `REC · ${barBeat(d)}`;
-    $('stLen').textContent = fmtTime(d);
+    if (now - lastRecDraw > 66) { S.view.spp = Math.max(d * 1.15, 10) / Math.max(1, W); S.view.start = 0; dirty = true; lastRecDraw = now; }
+    setText('clockTime', fmtTime(d));
+    setText('clockBars', `REC · ${barBeat(d)}`);
+    setText('stLen', fmtTime(d));
+    headT = d; headColor = colors.rec;
   } else {
     const p = currentPos();
-    $('clockTime').textContent = fmtTime(p);
-    $('clockBars').textContent = `${barBeat(p)} · ${Math.round(S.grid.bpm * S.speed * 10) / 10} BPM`;
+    setText('clockTime', fmtTime(p));
+    setText('clockBars', `${barBeat(p)} · ${Math.round(S.grid.bpm * S.speed * 10) / 10} BPM`);
+    if (S.playing || scrubbing) headT = p;
   }
-  if (dirty) { drawBack(); dirty = false; }
-  drawFront();
-  drawOverview();
-  // meters
+  if (dirty) { drawBack(); drawOverview(); dirty = false; }
+  if (fdirty) { drawFront(); fdirty = false; }
+  // playhead lines (DOM, no canvas repaint)
+  placeLine(elHead, headT == null ? 0 : xOf(headT), headT != null && xOf(headT) >= -2 && xOf(headT) <= W + 2, headColor);
+  const ovW = cvO.width / DPR, total = Math.max(S.recording ? REC.total / REC.sr : dur(), W * S.view.spp);
+  placeLine(elOvHead, headT == null || !total ? 0 : headT / total * ovW, headT != null && total > 0, headColor);
+  // meters: only repaint when the level changes
   let lv = [0, 0];
   if (S.recording || REC.testing) { lv = meterLevel.slice(); meterLevel = [0, 0]; }
   else if (analyser && S.playing) {
     analyser.getFloatTimeDomainData(outLevelBuf);
-    let m = 0; for (let i = 0; i < outLevelBuf.length; i++) m = Math.max(m, Math.abs(outLevelBuf[i]));
+    let m = 0; for (let i = 0; i < outLevelBuf.length; i++) { const v = Math.abs(outLevelBuf[i]); if (v > m) m = v; }
     lv = [m, m];
   }
-  for (let c = 0; c < 2; c++) meterSmooth[c] = lv[c] > meterSmooth[c] ? lv[c] : meterSmooth[c] * 0.9;
-  drawMeter($('meter'), meterSmooth);
-  if ($('dlgAudio').open) drawMeter($('testMeter'), meterSmooth);
-  requestAnimationFrame(frame);
+  for (let c = 0; c < 2; c++) { meterSmooth[c] = lv[c] > meterSmooth[c] ? lv[c] : meterSmooth[c] * 0.9; if (meterSmooth[c] < 1e-4) meterSmooth[c] = 0; }
+  const audioOpen = $('dlgAudio').open;
+  if (audioOpen || Math.abs(meterSmooth[0] - meterDrawn[0]) > 0.003 || Math.abs(meterSmooth[1] - meterDrawn[1]) > 0.003) {
+    drawMeter($('meter'), meterSmooth); meterDrawn = meterSmooth.slice();
+    if (audioOpen) drawMeter($('testMeter'), meterSmooth);
+  }
 }
 
 /* =============================================================================================
@@ -1535,7 +1547,8 @@ cvF.addEventListener('pointerdown', (e) => {
 
 cvF.addEventListener('pointermove', (e) => {
   const [x, y] = localXY(e);
-  hoverX = y >= WAVE_TOP ? x : null;
+  const hx = y >= WAVE_TOP ? x : null;
+  if (hx !== hoverX) { hoverX = hx; fdirty = true; }
   if (!drag) {
     const th = inTrackHeader(x, y);
     if (th !== trackHover) { trackHover = th; requestDraw(); }
@@ -1632,7 +1645,7 @@ function endDrag(e) {
 }
 cvF.addEventListener('pointerup', endDrag);
 cvF.addEventListener('pointercancel', endDrag);
-cvF.addEventListener('pointerleave', () => { hoverX = null; if (trackHover) { trackHover = false; requestDraw(); } });
+cvF.addEventListener('pointerleave', () => { hoverX = null; fdirty = true; if (trackHover) { trackHover = false; requestDraw(); } });
 
 cvF.addEventListener('dblclick', (e) => {
   if (!S.channels || S.recording) return;
@@ -1837,6 +1850,7 @@ function setSpeed(v) {
 }
 
 function updateTransportUI() {
+  fdirty = true;
   $('btnPlay').classList.toggle('on', S.playing);
   $('icoPlay').innerHTML = S.playing ? '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>' : '<path d="M7 4v16l13-8z"/>';
   $('btnRec').classList.toggle('on', S.recording);
@@ -2003,6 +2017,11 @@ function wire() {
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', () => { if ($('dlgAudio').open) refreshDevices(); });
 
   window.addEventListener('resize', resize);
+  const watchDpr = () => {
+    const mq = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    mq.addEventListener('change', () => { resize(); meterDrawn = [-1, -1]; watchDpr(); }, { once: true });
+  };
+  watchDpr();
   new ResizeObserver(resize).observe(tl);
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readColors(); requestDraw(); });
   window.addEventListener('beforeunload', (e) => { if (S.dirty && S.channels) { e.preventDefault(); e.returnValue = ''; } });
