@@ -1,0 +1,26 @@
+[package]
+name = "loop-catcher"
+version = "1.0.0"
+description = "Loop Catcher – record what's playing, loop it, slow it down, practise with it"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+cpal = "0.15"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+# Serve the bundled app (../loop-catcher) from inside the .exe instead of a dev server.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

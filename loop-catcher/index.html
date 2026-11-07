@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loop Catcher</title>
+<style>
+/* Fonts ship with the app (fonts/, SIL Open Font License) so it looks the same offline. */
+@font-face { font-family: "Big Shoulders Display"; src: url("fonts/BigShouldersDisplay.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "IBM Plex Sans"; src: url("fonts/IBMPlexSans.woff2") format("woff2"); font-weight: 100 700; font-display: swap; }
+@font-face { font-family: "IBM Plex Mono"; src: url("fonts/IBMPlexMono-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "IBM Plex Mono"; src: url("fonts/IBMPlexMono-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+
+/* Layout: transport strip, grid/edit toolbar, timeline (ruler, section lane, marker lane, waveform),
+   overview strip, status bar. Dark by default like most DAWs; a light theme follows the system. */
+:root {
+  --bg: #0E1117; --panel: #161A23; --panel-2: #1E2330; --panel-3: #262C3B; --line: #2A3141;
+  --ink: #E6E9EF; --muted: #8E96A8; --faint: #5B6377;
+  --accent: #F0A440; --accent-ink: #1C1204; --accent-soft: rgba(240, 164, 64, .16);
+  --wave: #5EC3CA; --wave-2: #3B8F96; --wave-bg: #12161E;
+  --rec: #FF4D4D; --play: #FFFFFF; --cursor: #F0A440;
+  --sel: rgba(240, 164, 64, .14); --sel-edge: #F0A440;
+  --grid-bar: rgba(255, 255, 255, .22); --grid-beat: rgba(255, 255, 255, .09); --grid-sub: rgba(255, 255, 255, .04);
+  --marker: #E8C547;
+  --font-display: "Big Shoulders Display", "Arial Narrow", sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #E4E7EE; --panel: #F5F6F9; --panel-2: #E9ECF2; --panel-3: #DCE1EA; --line: #C6CCD8;
+    --ink: #171C29; --muted: #586074; --faint: #8A92A4;
+    --accent: #B4630A; --accent-ink: #FFFFFF; --accent-soft: rgba(180, 99, 10, .14);
+    --wave: #1F7880; --wave-2: #5FA9AF; --wave-bg: #FBFCFD;
+    --rec: #D12C2C; --play: #171C29; --cursor: #B4630A;
+    --sel: rgba(180, 99, 10, .13); --sel-edge: #B4630A;
+    --grid-bar: rgba(23, 28, 41, .28); --grid-beat: rgba(23, 28, 41, .11); --grid-sub: rgba(23, 28, 41, .05);
+    --marker: #A6800B;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #E4E7EE; --panel: #F5F6F9; --panel-2: #E9ECF2; --panel-3: #DCE1EA; --line: #C6CCD8;
+  --ink: #171C29; --muted: #586074; --faint: #8A92A4;
+  --accent: #B4630A; --accent-ink: #FFFFFF; --accent-soft: rgba(180, 99, 10, .14);
+  --wave: #1F7880; --wave-2: #5FA9AF; --wave-bg: #FBFCFD;
+  --rec: #D12C2C; --play: #171C29; --cursor: #B4630A;
+  --sel: rgba(180, 99, 10, .13); --sel-edge: #B4630A;
+  --grid-bar: rgba(23, 28, 41, .28); --grid-beat: rgba(23, 28, 41, .11); --grid-sub: rgba(23, 28, 41, .05);
+  --marker: #A6800B;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 13px/1.4 var(--font-body);
+  display: grid; grid-template-rows: auto auto 1fr 46px auto;
+  overflow: hidden; user-select: none; -webkit-font-smoothing: antialiased;
+}
+[hidden] { display: none !important; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- bars ---- */
+.bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.bar.top { gap: 12px; padding-block: 10px; }
+.brand { font: 800 21px/1 var(--font-display); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.brand span { color: var(--accent); }
+.group { display: flex; align-items: center; gap: 6px; }
+.sep { width: 1px; align-self: stretch; background: var(--line); margin-inline: 2px; }
+.lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+.spacer { flex: 1; }
+
+.btn {
+  height: 30px; min-width: 30px; padding: 0 9px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel-2); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap;
+}
+.btn:hover { background: var(--panel-3); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.icon { padding: 0; width: 34px; }
+.btn svg { width: 16px; height: 16px; fill: currentColor; }
+.btn.big { height: 38px; width: 42px; }
+.btn.big svg { width: 18px; height: 18px; }
+.btn.rec svg { fill: var(--rec); }
+.btn.rec.on { background: var(--rec); border-color: var(--rec); color: #fff; animation: blink 1s steps(2) infinite; }
+.btn.rec.on svg { fill: #fff; }
+@keyframes blink { 50% { background: #8c1f1f; border-color: #8c1f1f; } }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+.clock { background: var(--wave-bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 12px; width: 178px; flex: none; text-align: right; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+.clock .t { font: 600 20px/1.15 var(--font-mono); letter-spacing: .02em; }
+.clock .b { font: 400 11px/1.2 var(--font-mono); color: var(--muted); }
+
+input[type=range] { accent-color: var(--accent); width: 84px; }
+input[type=number], input[type=text], select {
+  height: 28px; border-radius: 5px; border: 1px solid var(--line); background: var(--wave-bg); padding: 0 6px;
+}
+input[type=number] { width: 70px; font-family: var(--font-mono); }
+output { font: 12px var(--font-mono); width: 38px; flex: none; display: inline-block; color: var(--muted); white-space: nowrap; }
+.speedbtn { width: 66px; flex: none; justify-content: space-between; font: 600 12px var(--font-mono); padding: 0 7px; }
+.speedbtn::after { content: "▾"; font-size: 10px; color: var(--muted); }
+.btn.trainer { width: 104px; flex: none; }
+.btn.trainer.on { font-family: var(--font-mono); font-size: 12px; }
+.pop { position: fixed; z-index: 40; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; width: 330px; box-shadow: 0 14px 40px rgba(0,0,0,.45); display: grid; gap: 10px; }
+.pop h4 { margin: 0; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.pop .presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.pop .presets button { height: auto; padding: 5px 4px; flex-direction: column; gap: 0; line-height: 1.2; position: relative; }
+.pop .presets button b { font: 600 13px var(--font-mono); }
+.pop .presets button small { font-size: 10px; color: var(--muted); }
+.pop .presets button.on small { color: inherit; }
+.pop .presets button .x { position: absolute; top: 1px; right: 4px; font-size: 11px; color: var(--muted); }
+.pop .row { display: flex; gap: 6px; align-items: center; }
+.pop .row input { width: 72px; }
+.meter { width: 80px; height: 22px; border-radius: 4px; background: var(--wave-bg); border: 1px solid var(--line); }
+
+/* ---- timeline ---- */
+.timeline { position: relative; overflow: hidden; background: var(--wave-bg); }
+.timeline canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#cvFront { cursor: text; }
+.empty-hint {
+  position: absolute; left: 50%; top: 58%; transform: translate(-50%, -50%); text-align: center; color: var(--muted);
+  pointer-events: none; max-width: 520px; line-height: 1.6;
+}
+.empty-hint b { color: var(--ink); }
+.drop-hint { position: absolute; inset: 10px; border: 2px dashed var(--accent); border-radius: 10px; display: grid; place-items: center; font-size: 18px; color: var(--accent); background: var(--accent-soft); pointer-events: none; }
+.overview { position: relative; border-top: 1px solid var(--line); background: var(--panel); }
+.overview canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: pointer; }
+
+.status { display: flex; gap: 18px; padding: 5px 14px; background: var(--panel); border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
+.status b { color: var(--ink); font-weight: 600; font-family: var(--font-mono); }
+.status .msg { margin-left: auto; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.status .msg.err { color: var(--rec); }
+
+/* ---- dialogs ---- */
+dialog { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 0; width: min(560px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+dialog::backdrop { background: rgba(0, 0, 0, .45); }
+dialog h2 { font: 800 20px/1 var(--font-display); letter-spacing: .05em; text-transform: uppercase; margin: 0; padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+.dlg-body { padding: 14px 18px; display: grid; gap: 12px; max-height: 70vh; overflow: auto; user-select: text; }
+.dlg-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); }
+.field { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 10px; }
+.field > label:first-child { color: var(--muted); }
+.field select, .field input[type=text] { width: 100%; }
+.check { display: flex; align-items: center; gap: 8px; }
+.note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.note code, .help code { font-family: var(--font-mono); background: var(--panel-3); padding: 0 4px; border-radius: 3px; color: var(--ink); }
+.preview-name { font-family: var(--font-mono); background: var(--wave-bg); border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; word-break: break-all; }
+fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 12px; margin: 0; display: grid; gap: 10px; }
+legend { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding: 0 6px; }
+.help table { width: 100%; border-collapse: collapse; }
+.help td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.help td:first-child { white-space: nowrap; width: 1%; }
+kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; }
+.help h3 { margin: 6px 0 2px; font-size: 13px; color: var(--accent); }
+
+.ctx { position: fixed; z-index: 50; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px; min-width: 170px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+.ctx button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 6px 10px; border-radius: 5px; cursor: pointer; }
+.ctx button:hover { background: var(--panel-3); }
+.ctx .swatches { display: flex; gap: 5px; padding: 6px 10px; }
+.ctx .swatches span { width: 18px; height: 18px; border-radius: 4px; cursor: pointer; border: 1px solid rgba(255,255,255,.25); }
+.ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.progress { height: 4px; background: var(--panel-3); border-radius: 2px; overflow: hidden; width: 120px; display: inline-block; vertical-align: middle; }
+.progress i { display: block; height: 100%; background: var(--accent); width: 0; }
+</style>
+</head>
+<body>
+
+<!-- Transport -->
+<header class="bar top">
+  <div class="brand">Loop <span>Catcher</span></div>
+  <div class="group">
+    <button class="btn big" id="btnHome" title="Go to start / In point (Home)"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+    <button class="btn big" id="btnPlay" title="Play / Stop (Space)"><svg viewBox="0 0 24 24" id="icoPlay"><path d="M7 4v16l13-8z"/></svg></button>
+    <button class="btn big rec" id="btnRec" title="Record (R)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/></svg></button>
+    <button class="btn big" id="btnLoop" title="Loop (L) – loops In→Out, or the whole track"><svg viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></svg></button>
+  </div>
+  <div class="clock" title="Position: time and bar.beat.tick"><div class="t" id="clockTime">0:00.000</div><div class="b" id="clockBars">1.1.000 · 120 BPM</div></div>
+  <div class="group" title="Playback speed without changing pitch or key ( [ / ] , \ resets)">
+    <span class="lbl">Speed</span>
+    <input type="range" id="speed" min="25" max="150" step="1" value="100">
+    <button class="btn speedbtn" id="speedOut" title="Speed presets, custom % and target BPM">100%</button>
+    <button class="btn trainer" id="btnTrainer" title="Speed trainer: ramp the speed up while you practise (P)">Trainer</button>
+  </div>
+  <div class="group" title="Volume">
+    <span class="lbl">Vol</span>
+    <input type="range" id="vol" min="0" max="100" step="1" value="85">
+    <output id="volOut">85</output>
+  </div>
+  <div class="group" title="Pan left / right (double-click to centre)">
+    <span class="lbl">Pan</span>
+    <input type="range" id="pan" min="-100" max="100" step="1" value="0">
+    <output id="panOut">C</output>
+  </div>
+  <canvas class="meter" id="meter" title="Level (input while recording, output otherwise)"></canvas>
+  <div class="spacer"></div>
+  <div class="group">
+    <button class="btn" id="btnAudio" title="Audio hardware and options">Audio</button>
+    <button class="btn icon" id="btnHelp" title="Keyboard shortcuts (?)">?</button>
+  </div>
+</header>
+
+<!-- File / grid / metronome / edit -->
+<div class="bar">
+  <div class="group">
+    <button class="btn" id="btnNew" title="New: remove the track and start with an empty timeline">New</button>
+    <button class="btn" id="btnOpen" title="Open audio file or session (Ctrl+O)">Open</button>
+    <button class="btn" id="btnSaveSession" title="Save session: audio plus markers, sections, grid, In/Out, speed (Ctrl+Shift+S)">Save session</button>
+    <button class="btn primary" id="btnSave" title="Save as WAV (Ctrl+S)">Save WAV</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group" title="Tempo of the grid and metronome">
+    <span class="lbl">BPM</span>
+    <input type="number" id="bpm" min="20" max="400" step="0.01" value="120">
+    <button class="btn" id="btnHalf" title="Halve tempo">÷2</button>
+    <button class="btn" id="btnDouble" title="Double tempo">×2</button>
+    <button class="btn" id="btnTap" title="Tap tempo (T)">Tap</button>
+  </div>
+  <div class="group" title="Beats per bar">
+    <span class="lbl">Sig</span>
+    <select id="sig"></select>
+  </div>
+  <div class="group" title="Where bar 1 starts (seconds). Alt+drag the ruler to move the grid.">
+    <span class="lbl">Bar 1 at</span>
+    <input type="number" id="gridOffset" step="0.001" value="0">
+    <button class="btn icon" id="btnNudgeL" title="Move grid 5 ms earlier">‹</button>
+    <button class="btn icon" id="btnNudgeR" title="Move grid 5 ms later">›</button>
+    <button class="btn" id="btnBarHere" title="Put bar 1 at the cursor (D)">Bar 1 here</button>
+  </div>
+  <div class="group">
+    <span class="lbl">Grid</span>
+    <select id="division" title="Grid division">
+      <option value="bar">Bar</option>
+      <option value="1">1/4 (beat)</option>
+      <option value="0.5" selected>1/8</option>
+      <option value="0.25">1/16</option>
+      <option value="0.3333333333">1/8 T</option>
+      <option value="0.1666666667">1/16 T</option>
+    </select>
+    <button class="btn on" id="btnSnap" title="Snap to grid (N). Hold Alt to bypass.">Snap</button>
+    <button class="btn on" id="btnGrid" title="Show grid (G)">Grid</button>
+  </div>
+  <div class="group">
+    <button class="btn" id="btnDetect" title="Detect tempo and beats, and align the grid (B)">Detect beats</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group" title="Metronome (C)">
+    <button class="btn" id="btnMetro">Click</button>
+    <input type="range" id="metroVol" min="0" max="100" value="60" style="width:70px" title="Metronome volume">
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button class="btn" id="btnIn" title="Set In point (I)">In</button>
+    <button class="btn" id="btnOut" title="Set Out point (O)">Out</button>
+    <button class="btn" id="btnClearIO" title="Clear In/Out (X)">Clear</button>
+    <button class="btn" id="btnCrop" title="Crop track to In→Out (Ctrl+K)">Crop</button>
+    <button class="btn" id="btnMarker" title="Add marker at cursor (M)">+ Marker</button>
+    <button class="btn" id="btnSection" title="Add section from In→Out (S)">+ Section</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button class="btn icon" id="btnUndo" title="Undo (Ctrl+Z)">↶</button>
+    <button class="btn icon" id="btnRedo" title="Redo (Ctrl+Shift+Z / Ctrl+Y)">↷</button>
+    <button class="btn icon" id="btnZoomOut" title="Zoom out (−)">−</button>
+    <button class="btn icon" id="btnZoomIn" title="Zoom in (+)">+</button>
+    <button class="btn" id="btnFit" title="Zoom to fit (Z)">Fit</button>
+    <button class="btn on" id="btnFollow" title="Follow playhead (F)">Follow</button>
+  </div>
+</div>
+
+<main class="timeline" id="timeline">
+  <canvas id="cvBack"></canvas>
+  <canvas id="cvFront"></canvas>
+  <div class="empty-hint" id="emptyHint">
+    Press <b>● Record</b> (<kbd>R</kbd>) to capture the audio that is playing right now,<br>
+    or <b>open</b> / drop an audio file here.<br>
+    <span style="font-size:12px">Choose what to record from in <b>Audio setup</b>. Press <kbd>?</kbd> for all shortcuts.</span>
+  </div>
+  <div class="drop-hint" id="dropHint" hidden>Drop audio file to open</div>
+</main>
+<div class="overview" title="Overview – click or drag to move the view"><canvas id="cvOverview"></canvas></div>
+
+<footer class="status">
+  <span>Source <b id="stSource">–</b></span>
+  <span><b id="stRate">–</b></span>
+  <span>Length <b id="stLen">0:00.000</b></span>
+  <span>In→Out <b id="stSel">–</b></span>
+  <span>File <b id="stFile">Untitled</b></span>
+  <span class="msg" id="stMsg"></span>
+</footer>
+
+<input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.lcsession" hidden>
+
+<!-- Audio setup -->
+<dialog id="dlgAudio">
+  <h2>Audio setup</h2>
+  <div class="dlg-body">
+    <fieldset>
+      <legend>Record from</legend>
+      <div class="field">
+        <label for="srcType">Source</label>
+        <select id="srcType">
+          <option value="loopback" data-native>System audio – what's playing (loopback)</option>
+          <option value="input">Audio input device</option>
+          <option value="display">Browser tab / screen audio (picker)</option>
+        </select>
+      </div>
+      <div class="field" id="rowLoopDev">
+        <label for="loopDev">Playback device</label>
+        <select id="loopDev"></select>
+      </div>
+      <div class="field" id="rowInDev">
+        <label for="inDev">Input device</label>
+        <div class="group"><select id="inDev" style="flex:1"></select><button class="btn" id="btnPerm" title="Allow access so device names are shown">Allow</button></div>
+      </div>
+      <div class="field">
+        <label for="recChannels">Channels</label>
+        <select id="recChannels"><option value="2">Stereo</option><option value="1">Mono</option></select>
+      </div>
+      <div class="note" id="srcNote"></div>
+      <div class="field">
+        <label>Input level</label>
+        <div class="group"><canvas class="meter" id="testMeter" style="width:100%"></canvas><button class="btn" id="btnTest">Test</button></div>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Playback</legend>
+      <div class="field">
+        <label for="outDev">Output device</label>
+        <select id="outDev"></select>
+      </div>
+      <div class="field">
+        <label for="sampleRate">Sample rate</label>
+        <select id="sampleRate">
+          <option value="0">Device default</option>
+          <option value="44100">44.1 kHz</option>
+          <option value="48000">48 kHz</option>
+          <option value="96000">96 kHz</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="latency">Latency</label>
+        <select id="latency"><option value="interactive">Low</option><option value="balanced">Balanced</option><option value="playback">Safe (high)</option></select>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Options</legend>
+      <label class="check"><input type="checkbox" id="optMonitor"> Monitor the input while recording</label>
+      <label class="check"><input type="checkbox" id="optMetroRec"> Metronome plays while recording</label>
+      <label class="check"><input type="checkbox" id="optDetect" checked> Detect beats after recording</label>
+      <label class="check"><input type="checkbox" id="optRound" checked> Round detected tempo to whole BPM when close</label>
+      <label class="check"><input type="checkbox" id="optReturn" checked> Return to start position on stop</label>
+      <label class="check"><input type="checkbox" id="optStereoView" checked> Show stereo channels separately</label>
+    </fieldset>
+  </div>
+  <div class="dlg-foot"><button class="btn primary" id="btnAudioClose">Done</button></div>
+</dialog>
+
+<!-- Save -->
+<dialog id="dlgSave">
+  <h2>Save WAV</h2>
+  <div class="dlg-body">
+    <div class="field"><label for="saveName">Name</label><input type="text" id="saveName" spellcheck="false"></div>
+    <div class="field"><label for="savePattern">File name pattern</label><input type="text" id="savePattern" spellcheck="false"></div>
+    <div class="note">Tokens: <code>{name}</code> <code>{date}</code> <code>{time}</code> <code>{bpm}</code> <code>{n}</code> (counter) <code>{len}</code> (length) <code>{range}</code> (full / sel)</div>
+    <div class="field"><label>File name</label><div class="preview-name" id="savePreview"></div></div>
+    <div class="field"><label for="saveRange">Range</label>
+      <select id="saveRange"><option value="all">Whole track</option><option value="sel">In → Out</option></select>
+    </div>
+    <div class="field"><label for="saveBits">Format</label>
+      <select id="saveBits"><option value="16">WAV 16-bit PCM</option><option value="24" selected>WAV 24-bit PCM</option><option value="32">WAV 32-bit float</option></select>
+    </div>
+    <label class="check"><input type="checkbox" id="saveMeta" checked> Embed markers, sections and grid (cue points / regions)</label>
+    <fieldset id="saveNative" hidden>
+      <legend>Location</legend>
+      <div class="field"><label>Folder</label><div class="group"><span class="preview-name" id="saveDir" style="flex:1">Ask every time</span><button class="btn" id="btnPickDir">Choose…</button><button class="btn" id="btnClearDir" title="Ask every time">×</button></div></div>
+      <label class="check"><input type="checkbox" id="optAutoSave"> Save every new recording automatically to this folder</label>
+    </fieldset>
+  </div>
+  <div class="dlg-foot"><button class="btn" id="btnSaveCancel">Cancel</button><button class="btn primary" id="btnSaveGo">Save</button></div>
+</dialog>
+
+<!-- Rename -->
+<dialog id="dlgPrompt" style="width:min(380px, calc(100vw - 32px))">
+  <h2 id="promptTitle">Rename</h2>
+  <div class="dlg-body"><input type="text" id="promptInput" spellcheck="false" style="width:100%"></div>
+  <div class="dlg-foot"><button class="btn" id="promptCancel">Cancel</button><button class="btn primary" id="promptOk">OK</button></div>
+</dialog>
+
+<!-- Help -->
+<dialog id="dlgHelp" style="width:min(680px, calc(100vw - 32px))">
+  <h2>Shortcuts &amp; mouse</h2>
+  <div class="dlg-body help">
+    <h3>Transport</h3>
+    <table>
+      <tr><td><kbd>Space</kbd></td><td>Play / stop</td></tr>
+      <tr><td><kbd>R</kbd></td><td>Record / stop recording</td></tr>
+      <tr><td><kbd>L</kbd></td><td>Loop on / off (In→Out, or the whole track)</td></tr>
+      <tr><td><kbd>Home</kbd> / <kbd>Enter</kbd></td><td>Go to In point, or start</td></tr>
+      <tr><td><kbd>End</kbd></td><td>Go to Out point, or end</td></tr>
+      <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Move cursor by one grid step (<kbd>Shift</kbd>: one bar)</td></tr>
+      <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>Previous / next marker or section start</td></tr>
+      <tr><td><kbd>[</kbd> <kbd>]</kbd> <kbd>\</kbd></td><td>Slower / faster (5 %) / back to 100 % – pitch and key stay the same</td></tr>
+      <tr><td><kbd>P</kbd></td><td>Speed trainer on / off</td></tr>
+    </table>
+    <h3>Editing</h3>
+    <table>
+      <tr><td><kbd>I</kbd> / <kbd>O</kbd></td><td>Set In / Out point at the cursor (or playhead)</td></tr>
+      <tr><td><kbd>Shift</kbd>+<kbd>I</kbd> / <kbd>O</kbd></td><td>Jump to In / Out</td></tr>
+      <tr><td><kbd>X</kbd> / <kbd>Esc</kbd></td><td>Clear In / Out</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Crop the track to In→Out</td></tr>
+      <tr><td><kbd>M</kbd></td><td>Add marker</td></tr>
+      <tr><td><kbd>S</kbd></td><td>Add section from In→Out (or the bar at the cursor)</td></tr>
+      <tr><td><kbd>F2</kbd> / <kbd>Del</kbd></td><td>Rename / delete the selected marker or section</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo / redo</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Save WAV / open file or session</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></td><td>Save session (audio + markers, sections, grid, In/Out, speed)</td></tr>
+    </table>
+    <h3>Grid &amp; metronome</h3>
+    <table>
+      <tr><td><kbd>B</kbd></td><td>Detect beats and align the grid</td></tr>
+      <tr><td><kbd>D</kbd></td><td>Bar 1 starts at the cursor</td></tr>
+      <tr><td><kbd>T</kbd></td><td>Tap tempo</td></tr>
+      <tr><td><kbd>C</kbd></td><td>Metronome on / off</td></tr>
+      <tr><td><kbd>N</kbd> / <kbd>G</kbd></td><td>Snap on / off, grid on / off</td></tr>
+    </table>
+    <h3>View</h3>
+    <table>
+      <tr><td><kbd>+</kbd> <kbd>−</kbd> / <kbd>Ctrl</kbd>+wheel</td><td>Zoom</td></tr>
+      <tr><td><kbd>Z</kbd></td><td>Zoom to fit</td></tr>
+      <tr><td><kbd>F</kbd></td><td>Follow playhead on / off</td></tr>
+      <tr><td>Wheel</td><td>Scroll</td></tr>
+    </table>
+    <h3>Mouse</h3>
+    <table>
+      <tr><td>Click waveform</td><td>Set cursor (jumps there while playing)</td></tr>
+      <tr><td>Drag waveform</td><td>Scrub: the cursor follows the mouse and you hear the audio under it</td></tr>
+      <tr><td>Drag the track's header bar</td><td>Move the whole track on the timeline (snaps to the grid; markers and sections move with it)</td></tr>
+      <tr><td>Drag the IN / OUT flags</td><td>Adjust the In / Out points (set them with <kbd>I</kbd> / <kbd>O</kbd>)</td></tr>
+      <tr><td>Double-click waveform</td><td>Inside a section: select it and loop. On a free spot: select the whole track</td></tr>
+      <tr><td>Drag ruler</td><td>Scrub (audible). <kbd>Alt</kbd>+drag moves the grid</td></tr>
+      <tr><td>Section lane</td><td>Drag on empty space to draw a section; drag a section to move it, its edges to resize; double-click to select and loop; right-click for rename / colour / delete</td></tr>
+      <tr><td>Marker lane</td><td>Double-click to add a marker; drag to move; click to jump; right-click for more</td></tr>
+      <tr><td><kbd>Alt</kbd></td><td>Hold while dragging to ignore snap</td></tr>
+    </table>
+  </div>
+  <div class="dlg-foot"><button class="btn primary" id="btnHelpClose">Close</button></div>
+</dialog>
+
+<div class="ctx" id="ctxMenu" hidden></div>
+
+<!-- Speed presets -->
+<div class="pop" id="speedPop" hidden>
+  <h4>Speed – % of the original tempo</h4>
+  <div class="presets" id="presetGrid"></div>
+  <h4 id="myPresetsHead">Your presets</h4>
+  <div class="presets" id="myPresetGrid"></div>
+  <div class="row">
+    <input type="number" id="customPct" min="25" max="150" step="1" value="100"><span>%</span>
+    <button class="btn" id="btnCustomSet">Set</button>
+    <button class="btn" id="btnCustomAdd" title="Keep this percentage in your presets">+ Preset</button>
+  </div>
+  <div class="row">
+    <input type="number" id="targetBpm" min="10" max="400" step="0.1"><span>BPM</span>
+    <button class="btn" id="btnBpmSet" title="Play at this tempo (based on the grid BPM)">Play at this tempo</button>
+  </div>
+</div>
+
+<!-- Speed trainer -->
+<dialog id="dlgTrainer" style="width:min(460px, calc(100vw - 32px))">
+  <h2>Speed trainer</h2>
+  <div class="dlg-body">
+    <div class="note">Starts slow and speeds up step by step while the loop (In→Out, or the whole track) plays. Pitch and key stay the same.</div>
+    <div class="field"><label for="trStart">Start speed</label><div class="group"><input type="number" id="trStart" min="25" max="150" step="1"> %</div></div>
+    <div class="field"><label for="trTarget">Target speed</label><div class="group"><input type="number" id="trTarget" min="25" max="150" step="1"> %</div></div>
+    <div class="field"><label for="trStep">Change by</label><div class="group"><input type="number" id="trStep" min="1" max="50" step="1"> %</div></div>
+    <div class="field"><label for="trEvery">Every</label><div class="group"><input type="number" id="trEvery" min="1" max="64" step="1">
+      <select id="trUnit"><option value="loops">loop passes</option><option value="bars">bars</option></select></div></div>
+    <div class="field"><label for="trAt">At target</label>
+      <select id="trAt"><option value="hold">Keep playing at target</option><option value="restart">Start over from start speed</option><option value="stop">Stop playback</option></select></div>
+    <div class="note" id="trSummary"></div>
+  </div>
+  <div class="dlg-foot"><button class="btn" id="trCancel">Close</button><button class="btn" id="trStop">Stop trainer</button><button class="btn primary" id="trGo">Start trainer</button></div>
+</dialog>
+
+<script src="worklet.js"></script>
+<script src="dsp.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
