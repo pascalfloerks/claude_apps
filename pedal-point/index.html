@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Pedal Point</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
+/* Fonts ship with the app (fonts/, SIL Open Font License) so it looks the same offline. */
+@font-face { font-family: "Big Shoulders Display"; src: url("fonts/BigShouldersDisplay.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "IBM Plex Sans"; src: url("fonts/IBMPlexSans.woff2") format("woff2"); font-weight: 100 700; font-display: swap; }
+@font-face { font-family: "IBM Plex Mono"; src: url("fonts/IBMPlexMono-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "IBM Plex Mono"; src: url("fonts/IBMPlexMono-600.woff2") format("woff2"); font-weight: 600; font-display: swap; }
 /* Layout: an instrument panel. Transport strip on top, tone palette + arrangement grid in the middle,
    a guitar fretboard showing what to play over the pedal at the bottom. */
 :root {
@@ -1814,12 +1816,20 @@ $('saveForm').addEventListener('submit', e => {
   if (saveSession(name, name !== state.name)) $('dlgSave').close();
 });
 function exportJson() { return JSON.stringify({ app: 'pedal-point', ...state, name: $('saveName').value.trim() || state.name }, null, 2); }
-$('btnDownload').addEventListener('click', () => {
+$('btnDownload').addEventListener('click', async () => {
+  const fileName = (($('saveName').value.trim() || 'session').replace(/[^\w\- ]+/g, '').trim() || 'session') + '.pedalpoint.json';
+  if (window.__TAURI__) {   // Windows app: native Save As dialog
+    try {
+      const path = await window.__TAURI__.core.invoke('save_session_file', { fileName, contents: exportJson() });
+      if (path) toast('Saved to ' + path);
+    } catch (err) { toast('Could not save the file: ' + err); }
+    return;
+  }
   try {
     const blob = new Blob([exportJson()], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = (($('saveName').value.trim() || 'session').replace(/[^\w\- ]+/g, '').trim() || 'session') + '.pedalpoint.json';
+    a.download = fileName;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     toast('Download started. If nothing happens, use Copy as text.');

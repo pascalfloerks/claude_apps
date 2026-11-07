@@ -3,7 +3,9 @@
 ## Pedal Point (`pedal-point/`)
 
 A browser app for practising guitar chords and scales over a pedal tone (drone).
-It is one self-contained file: open `pedal-point/index.html` in any modern browser. Nothing to install.
+Open `pedal-point/index.html` in any modern browser. Nothing to install; the fonts ship in `pedal-point/fonts/`.
+
+A standalone Windows app (Tauri, Rust) that wraps the same page lives in [`windows/`](windows/README.md).
 
 ### Features
 

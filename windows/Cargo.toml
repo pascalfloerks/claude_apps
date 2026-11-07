@@ -1,0 +1,24 @@
+[package]
+name = "pedal-point"
+version = "1.0.0"
+description = "Pedal Point – practise guitar chords and scales over a pedal tone"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+[features]
+# Serve the bundled app (../pedal-point) from inside the .exe instead of a dev server.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
