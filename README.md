@@ -1,5 +1,61 @@
 # claude_apps
 
+## Loop Catcher (`loop-catcher/`)
+
+Record whatever is playing, then loop it, slow it down and practise with it.
+Open `loop-catcher/index.html` in Chrome or Edge, or use the standalone Windows app in
+[`loop-catcher-windows/`](loop-catcher-windows/README.md). The Windows app records system audio directly (WASAPI loopback).
+
+### Features
+
+- **Record** the audio that is playing right now, with a live waveform while recording:
+  - *System audio (loopback)* in the Windows app: pick any playback device.
+  - *Audio input device*: microphone, line-in, audio interface, "Stereo Mix", virtual cables, BlackHole …
+  - *Browser tab / screen audio*: Chrome/Edge's share picker ("Share tab audio" / "Share system audio").
+  - Choose input and output device, sample rate, latency, mono/stereo, and optional input monitoring. A level meter and "Test" button check the input.
+- **Timeline**: stereo waveform, playhead and edit cursor, zoom (down to single samples) and scroll, overview strip.
+- **In / Out points** (`I` / `O`) and **loop** (`L`): loops In→Out, or the whole track when nothing is set.
+- **Scrub**: drag in the ruler to hear the audio under the mouse.
+- **Slow down or speed up (25–150 %) without changing pitch or key.** It uses a WSOLA time stretch running in an AudioWorklet, and at 100 % the output is sample-exact.
+- **Volume and pan** sliders.
+- **Metronome** that follows the grid and the playback speed, with an accent on beat 1. It can also play while you record.
+- **Beat detection** (`B`) finds the tempo and the downbeat and lines the grid up with the track. It can run automatically after each recording.
+  Correct it with ÷2 / ×2, tap tempo, "Bar 1 here" (`D`), 5 ms nudges, or Alt+drag in the ruler.
+- **Grid** (bar, 1/4, 1/8, 1/16, triplets) with **snap** (`N`, hold Alt to bypass); the ruler shows bars and beats.
+- **Markers** (`M`, or double-click the marker lane) and **sections** (`S` from In→Out, or draw them in the section lane).
+  Move them, resize them, and rename, recolour or delete them from the right-click menu.
+- **Double-click a section** to select and loop it. **Double-click a free spot** on the track to select the whole track.
+- **Crop** the track to In→Out (`Ctrl+K`). The grid, markers and sections move with it.
+- **Undo / redo** for every edit.
+- **Save WAV** (`Ctrl+S`) as 16-bit, 24-bit or 32-bit float, for the whole track or only In→Out.
+  Name files with a custom pattern (`{name}`, `{date}`, `{time}`, `{bpm}`, `{n}`, `{len}`, `{range}`).
+  Markers and sections are embedded as standard cue points and regions, so DAWs and editors can read them.
+  When the file is opened again in Loop Catcher, its grid, markers and sections come back.
+- **Open** (`Ctrl+O`) or drag & drop WAV, MP3, FLAC, OGG or M4A files.
+
+### Keyboard shortcuts
+
+| Key | Action |
+| --- | --- |
+| Space | Play / stop |
+| R | Record / stop recording |
+| I / O | Set In / Out (Shift: jump to it) |
+| L | Loop on / off |
+| X / Esc | Clear In / Out |
+| Home / Enter, End | Go to In (or start), Out (or end) |
+| ← / → (Shift: by bar) | Move cursor by grid step |
+| , / . | Previous / next marker or section |
+| [ / ] / \ | Slower / faster / 100 % |
+| M / S | Add marker / section |
+| F2 / Del | Rename / delete selected marker or section |
+| B / D / T | Detect beats / bar 1 at cursor / tap tempo |
+| C / N / G | Metronome / snap / grid |
+| + / − / Z / F | Zoom in / out / fit, follow playhead |
+| Ctrl+K | Crop to In→Out |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
+| Ctrl+S / Ctrl+O | Save WAV / open file |
+| ? | All shortcuts and mouse actions |
+
 ## Pedal Point (`pedal-point/`)
 
 A browser app for practising guitar chords and scales over a pedal tone (drone).
