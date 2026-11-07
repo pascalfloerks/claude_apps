@@ -310,6 +310,10 @@ input[type="range"] { accent-color: var(--accent); width: 96px; }
 .fret-svg { display: block; min-width: 760px; width: 100%; height: auto; }
 .fret-info { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; font-size: 13px; }
 .fret-info b { font-weight: 600; }
+.fret-alts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.fret-alts button { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; cursor: pointer; font-size: 12.5px; color: var(--ink); }
+.fret-alts button[aria-pressed="true"] { background: var(--scale-soft); border-color: var(--scale); }
+.fret-alts .why { flex-basis: 100%; }
 .legend { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 .dot.root { background: var(--accent); }
@@ -573,6 +577,7 @@ details[open] summary { margin-bottom: 8px; }
       </div>
     </div>
     <div class="fret-scroll"><svg class="fret-svg" id="fretSvg" role="img" aria-label="Guitar fretboard"></svg></div>
+    <div class="fret-alts" id="fretAlts"></div>
     <div class="fret-info">
       <span id="fretText"></span>
       <span class="legend"><span class="dot root"></span>Root</span>
@@ -682,6 +687,16 @@ const SCALES = {
   locrian:    { label: 'Locrian',          iv: [0, 1, 3, 5, 6, 8, 10] },
   harmMinor:  { label: 'Harmonic minor',   iv: [0, 2, 3, 5, 7, 8, 11] },
   melMinor:   { label: 'Melodic minor',    iv: [0, 2, 3, 5, 7, 9, 11] },
+  majBlues:   { label: 'Major blues',      iv: [0, 2, 3, 4, 7, 9] },
+  compBlues:  { label: 'Major + minor pentatonic', iv: [0, 2, 3, 4, 5, 7, 9, 10] },
+  mixoPent:   { label: 'Mixolydian pentatonic (1 2 3 5 ♭7)', iv: [0, 2, 4, 7, 10] },
+  phrygDom:   { label: 'Phrygian dominant', iv: [0, 1, 4, 5, 7, 8, 10] },
+  lydDom:     { label: 'Lydian dominant',  iv: [0, 2, 4, 6, 7, 9, 10] },
+  mixoB6:     { label: 'Mixolydian ♭6',    iv: [0, 2, 4, 5, 7, 8, 10] },
+  altered:    { label: 'Altered (Super-Locrian)', iv: [0, 1, 3, 4, 6, 8, 10] },
+  wholeTone:  { label: 'Whole tone',       iv: [0, 2, 4, 6, 8, 10] },
+  dimHW:      { label: 'Diminished half-whole (7♭9)', iv: [0, 1, 3, 4, 6, 7, 9, 10] },
+  dimWH:      { label: 'Diminished whole-half (dim7)', iv: [0, 2, 3, 5, 6, 8, 9, 11] },
   none:       { label: 'Chord tones only', iv: [] },
 };
 // Seven-note scale families and the names of the modes built on each of their degrees
@@ -700,6 +715,10 @@ const KEY_MODES = {
   locrian:    { label: 'Locrian',         fam: 'major', rot: 6 },
   harmMinor:  { label: 'Harmonic minor',  fam: 'harm',  rot: 0 },
   melMinor:   { label: 'Melodic minor',   fam: 'mel',   rot: 0 },
+  // Blues: I, IV and V (minor blues: V and ♭VI) are dominant chords, which no single mode contains.
+  // The chords are built on Mixolydian / Aeolian with those degrees forced to dominant 7ths.
+  blues:      { label: 'Blues (I7 IV7 V7)', fam: 'major', rot: 4, dom: [0, 3, 4], blues: 'major' },
+  minorBlues: { label: 'Minor blues (i7 iv7 V7)', fam: 'major', rot: 5, dom: [4, 5], blues: 'minor' },
 };
 const VOICINGS = { note: 'Single tone', oct: 'Octave (root + 8va)', power: 'Power chord (1 5 8)', triad: 'Triad', seventh: '7th chord' };
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
@@ -719,6 +738,8 @@ function stackThirds(d, n, key) {   // intervals of a chord stacked in thirds on
 }
 function degreeType(d, voicing, key) {
   if (voicing === 'note' || voicing === 'oct' || voicing === 'power') return voicing;
+  const km = KEY_MODES[key.mode];
+  if (km.dom && km.dom.includes(d)) return voicing === 'seventh' ? 'dom7' : 'maj';
   return QUALITY[stackThirds(d, voicing === 'seventh' ? 4 : 3, key).join(',')] || 'maj';
 }
 function numeral(d, key, voicing) {
@@ -731,6 +752,42 @@ function numeral(d, key, voicing) {
 function modeAt(d, key) {   // the mode of the key's parent scale that starts on degree d
   const m = KEY_MODES[key.mode], fam = FAMILIES[m.fam], k = (m.rot + d) % 7;
   return { name: fam.modes[k], iv: rotate(fam.iv, k) };
+}
+// Every 7-note mode of the three parent scales plus the symmetric scales, for chord-scale matching.
+const LIB = [];
+[['major', 3], ['mel', 2], ['harm', 1]].forEach(([fk, prio]) => FAMILIES[fk].modes.forEach((name, k) => LIB.push({ name, iv: rotate(FAMILIES[fk].iv, k), prio })));
+LIB.push({ name: 'whole tone', iv: [0, 2, 4, 6, 8, 10], prio: 0 },
+         { name: 'diminished (half-whole)', iv: [0, 1, 3, 4, 6, 7, 9, 10], prio: 0 },
+         { name: 'diminished (whole-half)', iv: [0, 2, 3, 5, 6, 8, 9, 11], prio: 0 });
+/* Chord-scale choice ("minimal change"): of all scales on `root` that contain every required note,
+   prefer the one with the fewest notes outside the session key, then the most notes inside it,
+   then the more common family (major modes > melodic minor > harmonic minor > symmetric).
+   Diatonic chords therefore get the key's own mode; secondary dominants, borrowed and blues
+   chords get the closest scale that does not clash with the chord. */
+function chordScales(root, requiredPcs, key) {
+  const keyPcs = new Set(keyIv(key).map(i => (key.root + i) % 12));
+  const req = [...new Set(requiredPcs.map(p => (((p - root) % 12) + 12) % 12))];
+  const r = i => req.includes(i);
+  // A scale may not contradict the chord's third or fifth: no major 3rd over a minor chord
+  // (over a diminished chord that note is a ♭4/♭11 tension, so it is allowed there),
+  // no perfect 5th over a ♭5 (dim, m7♭5) or ♯5 (augmented) chord.
+  const forbid = [];
+  if (r(3) && !r(4) && r(7)) forbid.push(4);
+  if ((r(6) || (r(8) && r(4))) && !r(7)) forbid.push(7);
+  return LIB.map(sc => {
+    const pcs = sc.iv.map(i => (root + i) % 12);
+    const has = req.filter(x => sc.iv.includes(x)).length;
+    const clash = forbid.some(x => sc.iv.includes(x));
+    const inKey = pcs.filter(p => keyPcs.has(p)).length;
+    return { ...sc, root, fits: has === req.length && !clash, score: has * 1000 - (clash ? 500 : 0) - (pcs.length - inKey) * 20 + inKey + sc.prio };
+  }).sort((a, b) => b.score - a.score);
+}
+function bluesScales(key) {
+  const km = KEY_MODES[key.mode]; if (!km.blues) return [];
+  const r = key.root;
+  return km.blues === 'major'
+    ? [{ name: 'blues scale', iv: SCALES.blues.iv, root: r, form: true }, { name: 'major + minor pentatonic', iv: SCALES.compBlues.iv, root: r, form: true }, { name: 'major blues', iv: SCALES.majBlues.iv, root: r, form: true }]
+    : [{ name: 'blues scale', iv: SCALES.blues.iv, root: r, form: true }, { name: 'minor pentatonic', iv: SCALES.minPent.iv, root: r, form: true }];
 }
 const degreeOfPc = (pc, key) => keyIv(key).findIndex(i => (key.root + i) % 12 === pc);
 const isDeg = b => b && Number.isInteger(b.deg);
@@ -805,7 +862,7 @@ function normalize(raw) {
   if (s.palette.tab !== 'notes') s.palette.tab = 'degrees';
   s.palette.deg = clamp(Math.round(+s.palette.deg) || 0, 0, 6);
   s.palette.root = ((Math.round(+s.palette.root) % 12) + 12) % 12 || 0;
-  if (!['mode', 'key', 'follow'].includes(s.fret.root)) s.fret.root = Number.isInteger(+s.fret.root) ? clamp(+s.fret.root, 0, 11) : 'mode';
+  if (!['mode', 'pedal', 'key', 'follow'].includes(s.fret.root)) s.fret.root = Number.isInteger(+s.fret.root) ? clamp(+s.fret.root, 0, 11) : 'mode';
   s.bpm = clamp(Math.round(+s.bpm) || 90, 30, 300);
   s.beatsPerBar = clamp(Math.round(+s.beatsPerBar) || 4, 2, 7);
   s.bars = clamp(Math.round(+s.bars) || 8, 1, 128);
@@ -1598,41 +1655,75 @@ $('sessName').addEventListener('keydown', e => { if (e.key === 'Enter') e.target
 
 /* ================= Fretboard ================= */
 fillSelect($('fretScale'), Object.entries(SCALES).map(([k, s]) => [k, s.label]));
-fillSelect($('fretRoot'), [['mode', 'Mode of current chord (in key)'], ['key', 'Session key'], ['follow', 'Follow the pedal'], ...NOTES.map((n, i) => [i, n])]);
+fillSelect($('fretRoot'), [['mode', 'Scale for the current chord'], ['pedal', 'Mode over the pedal note'], ['key', 'Session key'], ['follow', 'Pedal note + scale picker'], ...NOTES.map((n, i) => [i, n])]);
 $('fretScale').addEventListener('change', e => { state.fret.scale = e.target.value; lastFretKey = ''; persistCurrent(); });
-$('fretRoot').addEventListener('change', e => { state.fret.root = ['mode', 'key', 'follow'].includes(e.target.value) ? e.target.value : +e.target.value; lastFretKey = ''; persistCurrent(); });
+$('fretRoot').addEventListener('change', e => { state.fret.root = ['mode', 'pedal', 'key', 'follow'].includes(e.target.value) ? e.target.value : +e.target.value; fretPick = null; lastFretKey = ''; persistCurrent(); });
 $('fretLabels').addEventListener('change', e => { state.fret.labels = e.target.value; lastFretKey = ''; persistCurrent(); });
 
 let lastFretKey = '';
+let fretPick = null;        // an alternative scale the person clicked: { ctx, name, iv, root }
+const pcsOf = midis => [...new Set(midis.map(m => m % 12))];
+const scaleTitle = sc => `${NOTES[sc.root]} ${sc.name}`;
+function fretSuggestion(sounding) {
+  // Returns { best, alts, why } for the chord-scale views, or null for the manual views.
+  const f = state.fret, K = state.key;
+  if (f.root !== 'mode' && f.root !== 'pedal' && f.root !== 'key') return null;
+  if (f.root === 'key') {
+    const km = KEY_MODES[K.mode];
+    const own = { name: km.blues ? (km.blues === 'major' ? 'Mixolydian' : 'Aeolian') : km.label, iv: keyIv(K), root: K.root };
+    if (!km.blues) return { best: own, alts: [], why: '' };
+    const bl = bluesScales(K);
+    return { best: bl[0], alts: [...bl.slice(1), own], why: 'Blues: one scale over the whole form. Switch to "Scale for the current chord" to follow each chord.' };
+  }
+  const chord = sounding.chord;
+  const over = f.root === 'pedal' ? sounding.pedalRoot : chord.root;
+  const req = f.root === 'pedal' ? pcsOf(sounding.notes) : pcsOf(notesOf(chord));
+  const list = chordScales(over, req, K);
+  const best = list[0];
+  const fitting = list.filter(x => x.fits && x !== best);
+  const alts = fitting.slice(0, 3);
+  // pentatonics that sit inside the best scale are the easy guitar shapes for it
+  [['major pentatonic', SCALES.majPent.iv], ['minor pentatonic', SCALES.minPent.iv]].forEach(([name, iv]) => {
+    if (iv.every(i => best.iv.includes(i))) alts.push({ name, iv, root: over });
+  });
+  alts.push(...bluesScales(K));
+  const diatonic = req.every(pc => degreeOfPc(pc, K) >= 0) && degreeOfPc(over, K) >= 0;
+  let why;
+  if (!best.fits) why = `No common scale on ${NOTES[over]} holds every sounding note; this one holds the most.`;
+  else if (diatonic) why = `${f.root === 'pedal' ? 'The pedal ' + NOTES[over] : 'This chord'} is ${numeral(degreeOfPc(over, K), K, 'triad')} of ${keyName(K)}, so the key's own mode fits.`;
+  else why = `${f.root === 'pedal' ? 'The notes sounding over ' + NOTES[over] : 'The notes of ' + nameOf(chord)} are not all in ${keyName(K)}. ★ holds every chord note and changes the fewest notes of the key.`;
+  if (KEY_MODES[K.mode].blues) why += ' In a blues you can also play the blues scale over the whole form.';
+  return { best, alts, why };
+}
 function renderFretboard(sounding) {
-  // sounding: { pedalRoot, notes: [midi], desc }
   const f = state.fret;
-  const K = state.key;
-  let root, iv, title, context = '';
-  if (f.root === 'mode') {
-    root = sounding.chordRoot;
-    const d = degreeOfPc(root, K);
-    if (d >= 0) {
-      const m = modeAt(d, K);
-      iv = m.iv; title = `${NOTES[root]} ${m.name}`;
-      context = ` (${numeral(d, K, 'triad')} of ${keyName(K)})`;
-    } else {
-      iv = SCALES[f.scale].iv; title = `${NOTES[root]} ${SCALES[f.scale].label.toLowerCase()}`;
-      context = ` (${NOTES[root]} is outside ${keyName(K)}, so the scale picker applies)`;
-    }
-  } else if (f.root === 'key') {
-    root = K.root; iv = keyIv(K); title = keyName(K);
+  let root, iv, title, sugg = null;
+  if ((sugg = fretSuggestion(sounding))) {
+    const ctx = [f.root, sugg.best.root, sugg.best.iv.join(','), sugg.alts.map(scaleTitle).join(',')].join('|');
+    const pick = fretPick && fretPick.ctx === ctx ? fretPick : null;
+    if (!pick) fretPick = null;
+    const shown = pick || sugg.best;
+    root = shown.root; iv = shown.iv; title = scaleTitle(shown);
+    sugg.ctx = ctx;
   } else {
     root = f.root === 'follow' ? sounding.pedalRoot : f.root;
     iv = SCALES[f.scale].iv; title = `${NOTES[root]} ${SCALES[f.scale].label.toLowerCase()}`;
   }
   const scalePcs = new Set(iv.map(i => (root + i) % 12));
   const chordPcs = new Set(sounding.notes.map(m => m % 12));
-  const key = [root, iv.join(','), title, context, f.labels, [...chordPcs].sort().join(','), sounding.desc].join('|');
+  const key = [root, iv.join(','), title, sugg ? sugg.ctx : '', f.labels, [...chordPcs].sort().join(','), sounding.desc].join('|');
   if (key === lastFretKey) return;
   lastFretKey = key;
   $('fretScale').value = f.scale; $('fretRoot').value = String(f.root); $('fretLabels').value = f.labels;
-  $('fretScale').disabled = (f.root === 'mode' && degreeOfPc(root, K) >= 0) || f.root === 'key';
+  $('fretScale').disabled = !!sugg;
+  const altsEl = $('fretAlts');
+  if (sugg) {
+    const chips = [sugg.best, ...sugg.alts];
+    altsEl.innerHTML = `<span>Options:</span>` + chips.map((c, i) =>
+      `<button type="button" data-alt="${i}" aria-pressed="${scaleTitle(c) === title && c.iv.join() === iv.join()}">${escapeHtml(scaleTitle(c))}${c.form ? ' (whole form)' : ''}${i === 0 ? ' ★' : ''}</button>`).join('') +
+      (sugg.why ? `<span class="why">${escapeHtml(sugg.why)}</span>` : '');
+    altsEl._chips = chips; altsEl._ctx = sugg.ctx;
+  } else altsEl.innerHTML = '';
 
   const W = 980, H = 236, left = 46, right = 16, top = 24, bottom = 30;
   const fw = (W - left - right) / (FRETS + 0.6);
@@ -1676,8 +1767,14 @@ function renderFretboard(sounding) {
   svgEl.innerHTML = svg;
   const scaleNames = iv.map(i => NOTES[(root + i) % 12]).join(' ');
   $('fretText').innerHTML = `<b>${escapeHtml(sounding.desc)}</b>` +
-    (iv.length ? ` · Play <b>${escapeHtml(title)}</b>${escapeHtml(context)}: ${scaleNames}` : '');
+    (iv.length ? ` · Showing <b>${escapeHtml(title)}</b>: ${scaleNames}` : '');
 }
+$('fretAlts').addEventListener('click', e => {
+  const b = e.target.closest('[data-alt]'); if (!b) return;
+  const c = $('fretAlts')._chips[+b.dataset.alt];
+  fretPick = +b.dataset.alt === 0 ? null : { ...c, ctx: $('fretAlts')._ctx };
+  lastFretKey = '';
+});
 
 /* ================= Live UI loop ================= */
 let lastSounding = '';
@@ -1695,7 +1792,7 @@ function currentEntry() {
 function soundingNow() {
   if (T.playing && T.mode === 'drone') {
     const b = { ...state.drone, root: currentDroneRoot() };
-    return { pedalRoot: b.root, chordRoot: b.root, notes: notesOf(b), desc: `Holding ${nameOf(b)}`, blocks: [] };
+    return { pedalRoot: b.root, chord: b, notes: notesOf(b), desc: `Holding ${nameOf(b)}`, blocks: [] };
   }
   let pos = null;
   if (T.playing) { const e = currentEntry(); pos = e ? e.pos : null; }
@@ -1714,7 +1811,7 @@ function soundingNow() {
   }
   if (!lanes.length) {
     const b = { ...state.drone };
-    return { pedalRoot: b.root, chordRoot: b.root, notes: notesOf(b), desc: `${nameOf(b)} (pedal tone panel)`, blocks: [] };
+    return { pedalRoot: b.root, chord: b, notes: notesOf(b), desc: `${nameOf(b)} (pedal tone panel)`, blocks: [] };
   }
   const bottom = lanes.reduce((a, b) => (notesOf(b)[0] < notesOf(a)[0] ? b : a));
   const notes = lanes.flatMap(notesOf);
@@ -1728,7 +1825,7 @@ function soundingNow() {
   const desc2 = lanes.length > 1
     ? upper.map(label).join(' + ') + ` over ${NOTES[bottom.root]} pedal`
     : label(lanes[0]);
-  return { pedalRoot: bottom.root, chordRoot: chord.root, notes, desc: (T.playing ? 'Now: ' : 'Selected: ') + desc2, blocks: lanes };
+  return { pedalRoot: bottom.root, chord, notes, desc: (T.playing ? 'Now: ' : 'Selected: ') + desc2, blocks: lanes };
 }
 function updateTransportUI() {
   const arrPlaying = T.playing && T.mode === 'arrange';
