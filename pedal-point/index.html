@@ -279,6 +279,15 @@ input[type="range"] { accent-color: var(--accent); width: 96px; }
   background: hsl(var(--h) var(--block-s) var(--block-l));
 }
 .add-lane { padding: 8px; }
+.block .num { font-family: var(--font-display); font-weight: 800; font-size: 17px; letter-spacing: .03em; margin-right: 4px; }
+.tabs { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+.tab { flex: 1; border: 0; background: var(--panel); padding: 6px 4px; cursor: pointer; font-weight: 500; font-size: 13px; color: var(--muted); }
+.tab + .tab { border-left: 1px solid var(--line); }
+.tab[aria-selected="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.key .deg { display: block; font: 800 19px/1 var(--font-display); letter-spacing: .03em; }
+.deg-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 4px; margin-bottom: 8px; }
+.deg-grid .root-btn { font-family: var(--font-display); font-size: 15px; letter-spacing: .02em; }
+.key-sum { font: 12px var(--font-mono); color: var(--muted); white-space: nowrap; }
 
 /* ---------- inspector ---------- */
 .inspector .insp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; }
@@ -386,6 +395,15 @@ details[open] summary { margin-bottom: 8px; }
     </div>
     <div class="t-group">
       <div class="stack">
+        <div class="row">
+          <label class="field"><span class="field-lbl">Session key</span><select id="keyRoot" aria-label="Key root"></select></label>
+          <label class="field"><span class="field-lbl">Mode</span><select id="keyMode" aria-label="Key mode"></select></label>
+        </div>
+        <span class="key-sum" id="keySum"></span>
+      </div>
+    </div>
+    <div class="t-group">
+      <div class="stack">
         <span class="field-lbl">Tempo (BPM)</span>
         <div class="bpm-box">
           <button class="icon-btn" id="bpmDown" type="button" aria-label="Slower">−</button>
@@ -440,7 +458,11 @@ details[open] summary { margin-bottom: 8px; }
     <aside class="side">
       <section class="panel" aria-labelledby="palTitle">
         <h2 id="palTitle">Tones</h2>
-        <p class="hint">Drag a tone onto a lane. Click it to listen.</p>
+        <div class="tabs" role="tablist" id="palTabs">
+          <button type="button" class="tab" role="tab" data-tab="degrees">Key degrees</button>
+          <button type="button" class="tab" role="tab" data-tab="notes">All 12 notes</button>
+        </div>
+        <p class="hint" id="palHint">Drag a tone onto a lane. Click it to listen.</p>
         <div class="fields">
           <label class="field"><span class="field-lbl">Play as</span><select id="palType"></select></label>
           <label class="field"><span class="field-lbl">Octave</span><select id="palOct"></select></label>
@@ -508,6 +530,8 @@ details[open] summary { margin-bottom: 8px; }
           </div>
           <div class="insp-grid">
             <div class="stack">
+              <span class="field-lbl" id="inspDegLbl">Degree in key</span>
+              <div class="deg-grid" id="inspDegs"></div>
               <span class="field-lbl">Root</span>
               <div class="root-grid" id="inspRoots"></div>
               <span class="notes-line" id="inspNotes"></span>
@@ -602,7 +626,7 @@ details[open] summary { margin-bottom: 8px; }
       <tr><td><kbd>+</kbd> <kbd>−</kbd></td><td>Tempo up / down by 1 BPM</td></tr>
       <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Move selected block a beat (with <kbd>Shift</kbd>: a bar)</td></tr>
       <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Move selected block to the lane above / below</td></tr>
-      <tr><td><kbd>Shift</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Transpose selected block a half step</td></tr>
+      <tr><td><kbd>Shift</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Transpose selected block (degree blocks move to the next degree in the key, others a half step)</td></tr>
       <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>Shorten / lengthen selected block a beat (with <kbd>Shift</kbd>: a bar)</td></tr>
       <tr><td><kbd>Delete</kbd></td><td>Remove selected block</td></tr>
       <tr><td><kbd>Ctrl</kbd> <kbd>D</kbd></td><td>Duplicate selected block</td></tr>
@@ -639,6 +663,9 @@ const CHORDS = {
   aug:   { label: 'Augmented',          suffix: '+',    iv: [0, 4, 8] },
   add9:  { label: 'Add9',               suffix: 'add9', iv: [0, 4, 7, 14] },
   min9:  { label: 'Minor 9',            suffix: 'm9',   iv: [0, 3, 7, 10, 14] },
+  dim7:  { label: 'Diminished 7',       suffix: 'dim7', iv: [0, 3, 6, 9] },
+  mM7:   { label: 'Minor-major 7',      suffix: 'm(maj7)', iv: [0, 3, 7, 11] },
+  augM7: { label: 'Augmented major 7',  suffix: 'maj7♯5', iv: [0, 4, 8, 11] },
 };
 const SCALES = {
   minPent:    { label: 'Minor pentatonic', iv: [0, 3, 5, 7, 10] },
@@ -655,6 +682,60 @@ const SCALES = {
   melMinor:   { label: 'Melodic minor',    iv: [0, 2, 3, 5, 7, 9, 11] },
   none:       { label: 'Chord tones only', iv: [] },
 };
+// Seven-note scale families and the names of the modes built on each of their degrees
+const FAMILIES = {
+  major: { iv: [0, 2, 4, 5, 7, 9, 11], modes: ['Ionian', 'Dorian', 'Phrygian', 'Lydian', 'Mixolydian', 'Aeolian', 'Locrian'] },
+  harm:  { iv: [0, 2, 3, 5, 7, 8, 11], modes: ['Harmonic minor', 'Locrian ♮6', 'Ionian ♯5', 'Dorian ♯4', 'Phrygian dominant', 'Lydian ♯2', 'Super-Locrian 𝄫7'] },
+  mel:   { iv: [0, 2, 3, 5, 7, 9, 11], modes: ['Melodic minor', 'Dorian ♭2', 'Lydian augmented', 'Lydian dominant', 'Mixolydian ♭6', 'Locrian ♮2', 'Altered'] },
+};
+const KEY_MODES = {
+  ionian:     { label: 'Major (Ionian)',  fam: 'major', rot: 0 },
+  dorian:     { label: 'Dorian',          fam: 'major', rot: 1 },
+  phrygian:   { label: 'Phrygian',        fam: 'major', rot: 2 },
+  lydian:     { label: 'Lydian',          fam: 'major', rot: 3 },
+  mixolydian: { label: 'Mixolydian',      fam: 'major', rot: 4 },
+  aeolian:    { label: 'Minor (Aeolian)', fam: 'major', rot: 5 },
+  locrian:    { label: 'Locrian',         fam: 'major', rot: 6 },
+  harmMinor:  { label: 'Harmonic minor',  fam: 'harm',  rot: 0 },
+  melMinor:   { label: 'Melodic minor',   fam: 'mel',   rot: 0 },
+};
+const VOICINGS = { note: 'Single tone', oct: 'Octave (root + 8va)', power: 'Power chord (1 5 8)', triad: 'Triad', seventh: '7th chord' };
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+const QUALITY = {
+  '0,4,7': 'maj', '0,3,7': 'min', '0,3,6': 'dim', '0,4,8': 'aug',
+  '0,4,7,11': 'maj7', '0,4,7,10': 'dom7', '0,3,7,10': 'min7', '0,3,6,10': 'm7b5', '0,3,6,9': 'dim7', '0,3,7,11': 'mM7', '0,4,8,11': 'augM7',
+};
+const SEVENTH_MARK = { maj7: 'maj7', dom7: '7', min7: '7', m7b5: 'ø7', dim7: '°7', mM7: '(maj7)', augM7: '+maj7' };
+const rotate = (iv, k) => iv.map((_, i) => (iv[(i + k) % 7] - iv[k] + 12) % 12);
+const keyIv = key => { const m = KEY_MODES[key.mode]; return rotate(FAMILIES[m.fam].iv, m.rot); };
+const keyName = key => `${NOTES[key.root]} ${KEY_MODES[key.mode].label}`;
+const degreeRoot = (d, key) => (key.root + keyIv(key)[d]) % 12;
+function stackThirds(d, n, key) {   // intervals of a chord stacked in thirds on degree d, relative to its root
+  const iv = keyIv(key), out = [];
+  for (let i = 0; i < n; i++) { const idx = d + 2 * i; out.push(iv[idx % 7] + 12 * Math.floor(idx / 7) - iv[d]); }
+  return out;
+}
+function degreeType(d, voicing, key) {
+  if (voicing === 'note' || voicing === 'oct' || voicing === 'power') return voicing;
+  return QUALITY[stackThirds(d, voicing === 'seventh' ? 4 : 3, key).join(',')] || 'maj';
+}
+function numeral(d, key, voicing) {
+  const tri = degreeType(d, 'triad', key);
+  let r = ROMAN[d];
+  if (tri === 'min' || tri === 'dim') r = r.toLowerCase();
+  if (voicing === 'seventh') return r + (SEVENTH_MARK[degreeType(d, 'seventh', key)] || '');
+  return r + (tri === 'dim' ? '°' : tri === 'aug' ? '+' : '');
+}
+function modeAt(d, key) {   // the mode of the key's parent scale that starts on degree d
+  const m = KEY_MODES[key.mode], fam = FAMILIES[m.fam], k = (m.rot + d) % 7;
+  return { name: fam.modes[k], iv: rotate(fam.iv, k) };
+}
+const degreeOfPc = (pc, key) => keyIv(key).findIndex(i => (key.root + i) % 12 === pc);
+const isDeg = b => b && Number.isInteger(b.deg);
+function resolveDegree(b, key) { if (isDeg(b)) { b.root = degreeRoot(b.deg, key); b.type = degreeType(b.deg, b.voicing, key); } return b; }
+function syncDegrees() { state.lanes.forEach(l => l.blocks.forEach(b => resolveDegree(b, state.key))); }
+function voicingOfType(t) { return ['note', 'oct', 'power'].includes(t) ? t : (CHORDS[t] && CHORDS[t].iv.length >= 4 ? 'seventh' : 'triad'); }
+
 const INTERVALS = ['1', '♭2', '2', '♭3', '3', '4', '♭5', '5', '♭6', '6', '♭7', '7'];
 const SOUNDS = {
   pad:     { label: 'Warm pad',      attack: 0.35, release: 0.6 },
@@ -677,9 +758,12 @@ const $ = id => document.getElementById(id);
 let idSeq = 1;
 const newId = () => 'b' + Date.now().toString(36) + (idSeq++).toString(36);
 const blk = (start, len, root, octave, type) => ({ id: newId(), start, len, root, octave, type });
+const dblk = (start, len, deg, octave, voicing, key) => resolveDegree({ id: newId(), start, len, deg, voicing, octave, root: 0, type: 'note' }, key);
 
 function exampleState() {
+  const key = { root: 4, mode: 'aeolian' };
   return {
+    key,
     version: 1,
     name: 'Example – E pedal study',
     bpm: 84, beatsPerBar: 4, bars: 8, loop: true, zoom: 36,
@@ -687,20 +771,20 @@ function exampleState() {
     mix: { master: 0.8, pedal: 0.7 },
     sound: 'pad',
     lanes: [
-      { name: 'Bass pedal', muted: false, blocks: [blk(0, 16, 4, 2, 'oct'), blk(16, 8, 9, 2, 'oct'), blk(24, 8, 11, 2, 'oct')] },
-      { name: 'Chords', muted: false, blocks: [blk(0, 8, 4, 3, 'min'), blk(8, 8, 0, 3, 'maj7'), blk(16, 8, 9, 3, 'min7'), blk(24, 8, 11, 3, 'dom7')] },
+      { name: 'Bass pedal', muted: false, blocks: [dblk(0, 16, 0, 2, 'oct', key), dblk(16, 8, 3, 2, 'oct', key), dblk(24, 8, 4, 2, 'oct', key)] },
+      { name: 'Chords', muted: false, blocks: [dblk(0, 8, 0, 3, 'triad', key), dblk(8, 8, 5, 3, 'seventh', key), dblk(16, 8, 3, 3, 'seventh', key), dblk(24, 8, 4, 3, 'seventh', key)] },
       { name: 'Lane 3', muted: false, blocks: [] },
     ],
-    palette: { type: 'note', octave: 2, len: 4, root: 4 },
+    palette: { tab: 'degrees', type: 'note', voicing: 'triad', octave: 2, len: 4, root: 4, deg: 0 },
     drone: { root: 4, type: 'note', octave: 2, every: 0, pattern: 'fifths' },
-    fret: { scale: 'minPent', root: 'follow', labels: 'notes' },
+    fret: { scale: 'minPent', root: 'mode', labels: 'notes' },
   };
 }
 function blankState(prev) {
   const s = exampleState();
   s.name = 'Untitled session';
   s.lanes = [{ name: 'Bass pedal', muted: false, blocks: [] }, { name: 'Chords', muted: false, blocks: [] }];
-  if (prev) { s.mix = { ...prev.mix }; s.sound = prev.sound; s.metronome = { ...prev.metronome }; s.zoom = prev.zoom; }
+  if (prev) { s.key = { ...prev.key }; s.mix = { ...prev.mix }; s.sound = prev.sound; s.metronome = { ...prev.metronome }; s.zoom = prev.zoom; }
   return s;
 }
 function normalize(raw) {
@@ -712,6 +796,14 @@ function normalize(raw) {
   s.palette = { ...d.palette, ...(raw.palette || {}) };
   s.drone = { ...d.drone, ...(raw.drone || {}) };
   s.fret = { ...d.fret, ...(raw.fret || {}) };
+  s.key = { ...d.key, ...(raw.key || {}) };
+  s.key.root = ((Math.round(+s.key.root) % 12) + 12) % 12 || 0;
+  if (!KEY_MODES[s.key.mode]) s.key.mode = 'aeolian';
+  if (!VOICINGS[s.palette.voicing]) s.palette.voicing = 'triad';
+  if (s.palette.tab !== 'notes') s.palette.tab = 'degrees';
+  s.palette.deg = clamp(Math.round(+s.palette.deg) || 0, 0, 6);
+  s.palette.root = ((Math.round(+s.palette.root) % 12) + 12) % 12 || 0;
+  if (!['mode', 'key', 'follow'].includes(s.fret.root)) s.fret.root = Number.isInteger(+s.fret.root) ? clamp(+s.fret.root, 0, 11) : 'mode';
   s.bpm = clamp(Math.round(+s.bpm) || 90, 30, 300);
   s.beatsPerBar = clamp(Math.round(+s.beatsPerBar) || 4, 2, 7);
   s.bars = clamp(Math.round(+s.bars) || 8, 1, 128);
@@ -726,8 +818,12 @@ function normalize(raw) {
     muted: !!l.muted,
     blocks: (Array.isArray(l.blocks) ? l.blocks : [])
       .filter(b => b && CHORDS[b.type] && Number.isFinite(+b.start) && Number.isFinite(+b.len))
-      .map(b => ({ id: newId(), start: Math.max(0, Math.round(+b.start)), len: Math.max(1, Math.round(+b.len)),
-                   root: ((Math.round(+b.root) % 12) + 12) % 12, octave: clamp(Math.round(+b.octave) || 2, 1, 5), type: b.type }))
+      .map(b => {
+        const nb = { id: newId(), start: Math.max(0, Math.round(+b.start)), len: Math.max(1, Math.round(+b.len)),
+                     root: ((Math.round(+b.root) % 12) + 12) % 12, octave: clamp(Math.round(+b.octave) || 2, 1, 5), type: b.type };
+        if (Number.isInteger(b.deg) && b.deg >= 0 && b.deg < 7) { nb.deg = b.deg; nb.voicing = VOICINGS[b.voicing] ? b.voicing : voicingOfType(b.type); resolveDegree(nb, s.key); }
+        return nb;
+      })
       .filter(b => b.start < n)
       .sort((a, b) => a.start - b.start),
   }));
@@ -1005,6 +1101,10 @@ function renderControls() {
   $('sessName').value = state.name;
   $('dirtyMark').hidden = !dirty;
   $('bpm').value = state.bpm;
+  fillSelect($('keyRoot'), NOTES.map((n, i) => [i, n]), state.key.root);
+  fillSelect($('keyMode'), Object.entries(KEY_MODES).map(([k, m]) => [k, m.label]), state.key.mode);
+  $('keySum').textContent = [0, 1, 2, 3, 4, 5, 6].map(d => numeral(d, state.key, 'triad')).join(' ');
+  $('keySum').title = [0, 1, 2, 3, 4, 5, 6].map(d => numeral(d, state.key, 'triad') + ' = ' + NOTES[degreeRoot(d, state.key)] + CHORDS[degreeType(d, 'triad', state.key)].suffix).join(', ');
   $('beatsPerBar').value = state.beatsPerBar;
   $('bars').value = state.bars;
   $('endMode').value = state.loop ? 'loop' : 'hold';
@@ -1018,18 +1118,41 @@ function renderControls() {
 }
 function renderPalette() {
   const p = state.palette;
-  fillSelect($('palType'), chordOptions(), p.type);
+  const degTab = p.tab === 'degrees';
+  $('palTabs').querySelectorAll('.tab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === p.tab)));
+  $('palHint').textContent = degTab
+    ? `Chords of ${keyName(state.key)}. Drag one onto a lane; change the session key and they follow.`
+    : 'Fixed notes that stay put when the key changes. Drag one onto a lane.';
+  if (degTab) fillSelect($('palType'), Object.entries(VOICINGS), p.voicing);
+  else fillSelect($('palType'), chordOptions(), p.type);
   fillSelect($('palOct'), octOptions, p.octave);
   const bpb = state.beatsPerBar;
   const lens = [[1, '1 beat'], [2, '2 beats'], [bpb, '1 bar'], [bpb * 2, '2 bars'], [bpb * 4, '4 bars'], [bpb * 8, '8 bars']]
     .filter((x, i, arr) => arr.findIndex(y => y[0] === x[0]) === i);
   if (!lens.some(l => l[0] === p.len)) lens.push([p.len, p.len + ' beats']);
   fillSelect($('palLen'), lens, p.len);
+  if (degTab) {
+    $('palKeys').innerHTML = ROMAN.map((_, d) => {
+      const b = paletteItem({ deg: d });
+      return `<div class="key${d === p.deg ? ' sel' : ''}" role="button" tabindex="0" data-deg="${d}" style="--h:${hueOf(b.root)}" aria-label="${numeral(d, state.key, p.voicing)}, ${nameOf(b)}, drag to the grid"><span class="deg">${numeral(d, state.key, p.voicing)}</span><small>${nameOf(b)}</small></div>`;
+    }).join('');
+    return;
+  }
   $('palKeys').innerHTML = NOTES.map((n, r) => {
     const b = { root: r, octave: p.octave, type: p.type };
     return `<div class="key${r === p.root ? ' sel' : ''}" role="button" tabindex="0" data-root="${r}" style="--h:${hueOf(r)}" aria-label="${nameOf(b)}, drag to the grid">${nameOf(b)}<small>${metaOf(b)}</small></div>`;
   }).join('');
 }
+function paletteItem(src) {   // src: { deg } or { root }
+  const p = state.palette;
+  if (src.deg !== undefined) return resolveDegree({ deg: +src.deg, voicing: p.voicing, octave: p.octave, root: 0, type: 'note' }, state.key);
+  return { root: +src.root, octave: p.octave, type: p.type };
+}
+function currentPaletteItem() { return state.palette.tab === 'degrees' ? paletteItem({ deg: state.palette.deg }) : paletteItem({ root: state.palette.root }); }
+$('palTabs').addEventListener('click', e => {
+  const t = e.target.closest('[data-tab]'); if (!t) return;
+  state.palette.tab = t.dataset.tab; renderPalette(); persistCurrent();
+});
 function renderDrone() {
   const d = state.drone;
   const liveRoot = T.playing && T.mode === 'drone' ? currentDroneRoot() : d.root;
@@ -1081,7 +1204,7 @@ function blockHtml(b) {
   const lenTxt = Number.isInteger(bars) ? `${bars} bar${bars === 1 ? '' : 's'}` : `${b.len} beat${b.len === 1 ? '' : 's'}`;
   return `<div class="block${b.id === selectedId ? ' selected' : ''}" data-id="${b.id}" tabindex="-1"
     style="--h:${hueOf(b.root)};left:${b.start * state.zoom}px;width:${b.len * state.zoom - 2}px">
-    <span class="b-name">${nameOf(b)}</span><span class="b-meta">${metaOf(b)} · ${lenTxt}</span>
+    <span class="b-name">${isDeg(b) ? `<span class="num">${numeral(b.deg, state.key, b.voicing)}</span>` : ''}${nameOf(b)}</span><span class="b-meta">${metaOf(b)} · ${lenTxt}</span>
     <span class="handle" data-handle="1" title="Drag to change length"></span></div>`;
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -1092,11 +1215,15 @@ function renderInspector() {
   $('inspBody').hidden = !f;
   if (!f) return;
   const b = f.block, bpb = state.beatsPerBar;
-  $('inspName').textContent = nameOf(b);
+  $('inspName').textContent = (isDeg(b) ? numeral(b.deg, state.key, b.voicing) + ' · ' : '') + nameOf(b);
+  $('inspDegLbl').textContent = `Degree in ${keyName(state.key)}`;
+  $('inspDegs').innerHTML = ROMAN.map((_, d) => `<button type="button" class="root-btn" data-deg="${d}" aria-pressed="${b.deg === d}" title="${NOTES[degreeRoot(d, state.key)]}">${numeral(d, state.key, isDeg(b) ? b.voicing : voicingOfType(b.type))}</button>`).join('') +
+    `<button type="button" class="root-btn" data-deg="free" aria-pressed="${!isDeg(b)}" title="Fixed note, ignores the key">Free</button>`;
   const bar = Math.floor(b.start / bpb) + 1, beat = (b.start % bpb) + 1;
   $('inspWhere').textContent = `${state.lanes[f.lane].name} · starts bar ${bar}, beat ${beat} · ${b.len} beat${b.len === 1 ? '' : 's'}`;
   $('inspRoots').innerHTML = NOTES.map((n, r) => `<button type="button" class="root-btn" data-root="${r}" aria-pressed="${r === b.root}">${n}</button>`).join('');
-  fillSelect($('inspType'), chordOptions(), b.type);
+  if (isDeg(b)) fillSelect($('inspType'), Object.entries(VOICINGS), b.voicing);
+  else fillSelect($('inspType'), chordOptions(), b.type);
   $('inspOct').textContent = b.octave;
   $('inspLen').textContent = b.len;
   $('inspNotes').textContent = 'Notes: ' + notesOf(b).map(m => NOTES[m % 12] + (Math.floor(m / 12) - 1)).join('  ') +
@@ -1123,7 +1250,8 @@ let drag = null;
 const DRAG_THRESHOLD = 5;
 function laneAtPoint(x, y) {
   const scroll = $('tlScroll').getBoundingClientRect();
-  if (x < scroll.left || x > scroll.right) return null;
+  const head = tl.querySelector('.lane .tl-head');
+  if (x < scroll.left + (head ? head.offsetWidth : 0) || x > scroll.right) return null;   // not under the sticky lane labels
   const tracks = tl.querySelectorAll('.lane-track');
   for (const el of tracks) {
     const r = el.getBoundingClientRect();
@@ -1142,13 +1270,14 @@ $('palKeys').addEventListener('pointerdown', e => {
   const key = e.target.closest('.key'); if (!key || e.button !== 0) return;
   e.preventDefault();
   key.setPointerCapture(e.pointerId);
-  state.palette.root = +key.dataset.root;
+  if (key.dataset.deg !== undefined) state.palette.deg = +key.dataset.deg; else state.palette.root = +key.dataset.root;
   $('palKeys').querySelectorAll('.key').forEach(k => k.classList.toggle('sel', k === key));
-  drag = { kind: 'new', root: +key.dataset.root, x0: e.clientX, y0: e.clientY, started: false, src: key };
+  const item = paletteItem(key.dataset.deg !== undefined ? { deg: key.dataset.deg } : { root: key.dataset.root });
+  drag = { kind: 'new', item, root: item.root, x0: e.clientX, y0: e.clientY, started: false, src: key };
 });
 $('palKeys').addEventListener('keydown', e => {
   const key = e.target.closest('.key'); if (!key) return;
-  if (e.key === 'Enter') { e.preventDefault(); const p = state.palette; audition({ root: +key.dataset.root, octave: p.octave, type: p.type }); }
+  if (e.key === 'Enter') { e.preventDefault(); audition(paletteItem(key.dataset.deg !== undefined ? { deg: key.dataset.deg } : { root: key.dataset.root })); }
 });
 tl.addEventListener('pointerdown', e => {
   if (e.button !== 0) return;
@@ -1181,13 +1310,14 @@ tl.addEventListener('dblclick', e => {
   if (!track || e.target.closest('.block')) return;
   const li = +track.dataset.lane, lane = state.lanes[li];
   const start = Math.floor((e.clientX - track.getBoundingClientRect().left) / state.zoom);
-  addBlock(li, start, state.palette.root);
+  addBlock(li, start, currentPaletteItem());
 });
-function addBlock(li, start, root) {
+function addBlock(li, start, item) {
   const lane = state.lanes[li], p = state.palette;
   if (start < 0 || start >= totalBeats() || blockAt(lane, start)) { toast('That beat is already taken'); return false; }
   const len = Math.min(p.len, roomAt(lane, start));
-  const b = blk(start, len, root, p.octave, p.type);
+  const b = blk(start, len, item.root, p.octave, item.type);
+  if (isDeg(item)) { b.deg = item.deg; b.voicing = item.voicing; resolveDegree(b, state.key); }
   mutate(() => { lane.blocks.push(b); sortLane(lane); });
   select(b.id);
   return true;
@@ -1203,7 +1333,7 @@ window.addEventListener('pointermove', e => {
       const p = state.palette;
       const g = document.createElement('div');
       g.className = 'drag-ghost'; g.style.setProperty('--h', hueOf(drag.root));
-      g.textContent = nameOf({ root: drag.root, type: p.type, octave: p.octave });
+      g.textContent = (isDeg(drag.item) ? numeral(drag.item.deg, state.key, drag.item.voicing) + ' · ' : '') + nameOf(drag.item);
       document.body.appendChild(g); drag.ghost = g;
     } else drag.el.classList.add('dragging');
   }
@@ -1250,12 +1380,12 @@ function endDrag(e, cancelled) {
   if (d.ghost) d.ghost.remove();
   if (d.preview) d.preview.remove();
   if (!d.started) {
-    if (d.kind === 'new' && !cancelled) { const p = state.palette; audition({ root: d.root, octave: p.octave, type: p.type }); }
+    if (d.kind === 'new' && !cancelled) audition(d.item);
     return;
   }
   if (cancelled || !d.target) { renderTimeline(); return; }
   if (d.kind === 'new') {
-    addBlock(d.target.li, d.target.start, d.root);
+    addBlock(d.target.li, d.target.start, d.item);
   } else if (d.kind === 'move') {
     const { li, start } = d.target;
     if (li === d.lane && start === d.orig.start) { renderTimeline(); return; }
@@ -1346,10 +1476,29 @@ function duplicateSelected() {
 }
 $('inspRoots').addEventListener('click', e => {
   const btn = e.target.closest('[data-root]'); if (!btn) return;
-  editSelected(b => { b.root = +btn.dataset.root; });
+  editSelected(b => { b.root = +btn.dataset.root; delete b.deg; delete b.voicing; });
   const f = findBlock(selectedId); if (f && !T.playing) audition(f.block, 0.9);
 });
-$('inspType').addEventListener('change', e => editSelected(b => { b.type = e.target.value; }));
+$('inspType').addEventListener('change', e => editSelected(b => { if (isDeg(b)) { b.voicing = e.target.value; resolveDegree(b, state.key); } else b.type = e.target.value; }));
+$('inspDegs').addEventListener('click', e => {
+  const btn = e.target.closest('[data-deg]'); if (!btn) return;
+  editSelected(b => {
+    if (btn.dataset.deg === 'free') { delete b.deg; delete b.voicing; return; }
+    if (!isDeg(b)) b.voicing = voicingOfType(b.type);
+    b.deg = +btn.dataset.deg; resolveDegree(b, state.key);
+  });
+  const f = findBlock(selectedId); if (f && !T.playing) audition(f.block, 0.9);
+});
+function transposeSelected(dir) {
+  editSelected(b => {
+    if (isDeg(b)) {
+      const nd = b.deg + dir;
+      if (nd > 6) b.octave = clamp(b.octave + 1, 1, 5); else if (nd < 0) b.octave = clamp(b.octave - 1, 1, 5);
+      b.deg = (nd + 7) % 7; resolveDegree(b, state.key);
+    } else if (dir > 0) { if (b.root === 11) { b.root = 0; b.octave = clamp(b.octave + 1, 1, 5); } else b.root++; }
+    else { if (b.root === 0) { b.root = 11; b.octave = clamp(b.octave - 1, 1, 5); } else b.root--; }
+  });
+}
 $('inspOctDown').addEventListener('click', () => editSelected(b => { b.octave = clamp(b.octave - 1, 1, 5); }));
 $('inspOctUp').addEventListener('click', () => editSelected(b => { b.octave = clamp(b.octave + 1, 1, 5); }));
 $('inspLenDown').addEventListener('click', () => resizeSelected(-1));
@@ -1409,7 +1558,16 @@ $('pedalVol').addEventListener('input', e => { state.mix.pedal = +e.target.value
 $('masterVol').addEventListener('input', e => { state.mix.master = +e.target.value / 100; $('masterVolOut').textContent = e.target.value; applyMix(); setDirty(true); });
 $('sound').addEventListener('change', e => mutate(() => { state.sound = e.target.value; }, { render: false }));
 $('zoom').addEventListener('input', e => { state.zoom = +e.target.value; renderTimeline(); persistCurrent(); });
-$('palType').addEventListener('change', e => { state.palette.type = e.target.value; renderPalette(); persistCurrent(); });
+$('palType').addEventListener('change', e => {
+  if (state.palette.tab === 'degrees') state.palette.voicing = e.target.value; else state.palette.type = e.target.value;
+  renderPalette(); persistCurrent();
+});
+function setKey(root, mode) {
+  mutate(() => { state.key = { root, mode }; syncDegrees(); });
+  toast(`Key: ${keyName(state.key)}`);
+}
+$('keyRoot').addEventListener('change', e => setKey(+e.target.value, state.key.mode));
+$('keyMode').addEventListener('change', e => setKey(state.key.root, e.target.value));
 $('palOct').addEventListener('change', e => { state.palette.octave = +e.target.value; renderPalette(); persistCurrent(); });
 $('palLen').addEventListener('change', e => { state.palette.len = +e.target.value; persistCurrent(); });
 $('droneRoots').addEventListener('click', e => {
@@ -1438,23 +1596,41 @@ $('sessName').addEventListener('keydown', e => { if (e.key === 'Enter') e.target
 
 /* ================= Fretboard ================= */
 fillSelect($('fretScale'), Object.entries(SCALES).map(([k, s]) => [k, s.label]));
-fillSelect($('fretRoot'), [['follow', 'Follow the pedal'], ...NOTES.map((n, i) => [i, n])]);
+fillSelect($('fretRoot'), [['mode', 'Mode of current chord (in key)'], ['key', 'Session key'], ['follow', 'Follow the pedal'], ...NOTES.map((n, i) => [i, n])]);
 $('fretScale').addEventListener('change', e => { state.fret.scale = e.target.value; lastFretKey = ''; persistCurrent(); });
-$('fretRoot').addEventListener('change', e => { state.fret.root = e.target.value === 'follow' ? 'follow' : +e.target.value; lastFretKey = ''; persistCurrent(); });
+$('fretRoot').addEventListener('change', e => { state.fret.root = ['mode', 'key', 'follow'].includes(e.target.value) ? e.target.value : +e.target.value; lastFretKey = ''; persistCurrent(); });
 $('fretLabels').addEventListener('change', e => { state.fret.labels = e.target.value; lastFretKey = ''; persistCurrent(); });
 
 let lastFretKey = '';
 function renderFretboard(sounding) {
   // sounding: { pedalRoot, notes: [midi], desc }
   const f = state.fret;
-  const root = f.root === 'follow' ? sounding.pedalRoot : f.root;
-  const scale = SCALES[f.scale];
-  const scalePcs = new Set(scale.iv.map(i => (root + i) % 12));
+  const K = state.key;
+  let root, iv, title, context = '';
+  if (f.root === 'mode') {
+    root = sounding.chordRoot;
+    const d = degreeOfPc(root, K);
+    if (d >= 0) {
+      const m = modeAt(d, K);
+      iv = m.iv; title = `${NOTES[root]} ${m.name}`;
+      context = ` (${numeral(d, K, 'triad')} of ${keyName(K)})`;
+    } else {
+      iv = SCALES[f.scale].iv; title = `${NOTES[root]} ${SCALES[f.scale].label.toLowerCase()}`;
+      context = ` (${NOTES[root]} is outside ${keyName(K)}, so the scale picker applies)`;
+    }
+  } else if (f.root === 'key') {
+    root = K.root; iv = keyIv(K); title = keyName(K);
+  } else {
+    root = f.root === 'follow' ? sounding.pedalRoot : f.root;
+    iv = SCALES[f.scale].iv; title = `${NOTES[root]} ${SCALES[f.scale].label.toLowerCase()}`;
+  }
+  const scalePcs = new Set(iv.map(i => (root + i) % 12));
   const chordPcs = new Set(sounding.notes.map(m => m % 12));
-  const key = [root, f.scale, f.labels, [...chordPcs].sort().join(','), sounding.desc].join('|');
+  const key = [root, iv.join(','), title, context, f.labels, [...chordPcs].sort().join(','), sounding.desc].join('|');
   if (key === lastFretKey) return;
   lastFretKey = key;
   $('fretScale').value = f.scale; $('fretRoot').value = String(f.root); $('fretLabels').value = f.labels;
+  $('fretScale').disabled = (f.root === 'mode' && degreeOfPc(root, K) >= 0) || f.root === 'key';
 
   const W = 980, H = 236, left = 46, right = 16, top = 24, bottom = 30;
   const fw = (W - left - right) / (FRETS + 0.6);
@@ -1496,9 +1672,9 @@ function renderFretboard(sounding) {
   const svgEl = $('fretSvg');
   svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svgEl.innerHTML = svg;
-  const scaleNames = scale.iv.map(i => NOTES[(root + i) % 12]).join(' ');
+  const scaleNames = iv.map(i => NOTES[(root + i) % 12]).join(' ');
   $('fretText').innerHTML = `<b>${escapeHtml(sounding.desc)}</b>` +
-    (scale.iv.length ? ` · ${NOTES[root]} ${escapeHtml(scale.label.toLowerCase())}: ${scaleNames}` : '');
+    (iv.length ? ` · Play <b>${escapeHtml(title)}</b>${escapeHtml(context)}: ${scaleNames}` : '');
 }
 
 /* ================= Live UI loop ================= */
@@ -1517,7 +1693,7 @@ function currentEntry() {
 function soundingNow() {
   if (T.playing && T.mode === 'drone') {
     const b = { ...state.drone, root: currentDroneRoot() };
-    return { pedalRoot: b.root, notes: notesOf(b), desc: `Holding ${nameOf(b)}`, blocks: [] };
+    return { pedalRoot: b.root, chordRoot: b.root, notes: notesOf(b), desc: `Holding ${nameOf(b)}`, blocks: [] };
   }
   let pos = null;
   if (T.playing) { const e = currentEntry(); pos = e ? e.pos : null; }
@@ -1536,14 +1712,21 @@ function soundingNow() {
   }
   if (!lanes.length) {
     const b = { ...state.drone };
-    return { pedalRoot: b.root, notes: notesOf(b), desc: `${nameOf(b)} (pedal tone panel)`, blocks: [] };
+    return { pedalRoot: b.root, chordRoot: b.root, notes: notesOf(b), desc: `${nameOf(b)} (pedal tone panel)`, blocks: [] };
   }
   const bottom = lanes.reduce((a, b) => (notesOf(b)[0] < notesOf(a)[0] ? b : a));
   const notes = lanes.flatMap(notesOf);
   const desc = lanes.length > 1
     ? lanes.filter(b => b !== bottom).map(nameOf).join(' + ') + ` over ${NOTES[bottom.root]} pedal`
     : nameOf(lanes[0]);
-  return { pedalRoot: bottom.root, notes, desc: (T.playing ? 'Now: ' : 'Selected: ') + desc, blocks: lanes };
+  // the chord that sets the mode: the last lane holding a key-degree block, else the top chord over the pedal
+  const degBlocks = lanes.filter(isDeg), upper = lanes.filter(b => b !== bottom);
+  const chord = degBlocks.length > 1 ? degBlocks.filter(b => b !== bottom).pop() : (degBlocks[0] || upper[upper.length - 1] || bottom);
+  const label = b => (isDeg(b) ? numeral(b.deg, state.key, b.voicing) + ' ' : '') + nameOf(b);
+  const desc2 = lanes.length > 1
+    ? upper.map(label).join(' + ') + ` over ${NOTES[bottom.root]} pedal`
+    : label(lanes[0]);
+  return { pedalRoot: bottom.root, chordRoot: chord.root, notes, desc: (T.playing ? 'Now: ' : 'Selected: ') + desc2, blocks: lanes };
 }
 function updateTransportUI() {
   const arrPlaying = T.playing && T.mode === 'arrange';
@@ -1753,8 +1936,8 @@ document.addEventListener('keydown', e => {
     case 'Delete': case 'Backspace': if (selectedId) { e.preventDefault(); deleteSelected(); } break;
     case 'ArrowLeft': if (selectedId) { e.preventDefault(); moveSelected(-step); } break;
     case 'ArrowRight': if (selectedId) { e.preventDefault(); moveSelected(step); } break;
-    case 'ArrowUp': if (selectedId) { e.preventDefault(); e.shiftKey ? editSelected(b => { if (b.root === 11) { b.root = 0; b.octave = clamp(b.octave + 1, 1, 5); } else b.root++; }) : moveSelectedLane(-1); } break;
-    case 'ArrowDown': if (selectedId) { e.preventDefault(); e.shiftKey ? editSelected(b => { if (b.root === 0) { b.root = 11; b.octave = clamp(b.octave - 1, 1, 5); } else b.root--; }) : moveSelectedLane(1); } break;
+    case 'ArrowUp': if (selectedId) { e.preventDefault(); e.shiftKey ? transposeSelected(1) : moveSelectedLane(-1); } break;
+    case 'ArrowDown': if (selectedId) { e.preventDefault(); e.shiftKey ? transposeSelected(-1) : moveSelectedLane(1); } break;
     case '[': case '{': if (selectedId) resizeSelected(-step); break;
     case ']': case '}': if (selectedId) resizeSelected(step); break;
   }
