@@ -67,7 +67,7 @@ button, input, select { font: inherit; color: inherit; }
 /* ---- bars ---- */
 .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .bar.top { gap: 12px; padding-block: 10px; }
-.brand { font: 800 22px/1 var(--font-display); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.brand { font: 800 21px/1 var(--font-display); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .brand span { color: var(--accent); }
 .group { display: flex; align-items: center; gap: 6px; }
 .sep { width: 1px; align-self: stretch; background: var(--line); margin-inline: 2px; }
@@ -91,17 +91,31 @@ button, input, select { font: inherit; color: inherit; }
 @keyframes blink { 50% { background: #8c1f1f; border-color: #8c1f1f; } }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 
-.clock { background: var(--wave-bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 12px; min-width: 140px; text-align: right; }
+.clock { background: var(--wave-bg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 12px; width: 178px; flex: none; text-align: right; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
 .clock .t { font: 600 20px/1.15 var(--font-mono); letter-spacing: .02em; }
 .clock .b { font: 400 11px/1.2 var(--font-mono); color: var(--muted); }
 
-input[type=range] { accent-color: var(--accent); width: 96px; }
+input[type=range] { accent-color: var(--accent); width: 84px; }
 input[type=number], input[type=text], select {
   height: 28px; border-radius: 5px; border: 1px solid var(--line); background: var(--wave-bg); padding: 0 6px;
 }
 input[type=number] { width: 70px; font-family: var(--font-mono); }
-output { font: 12px var(--font-mono); min-width: 36px; display: inline-block; color: var(--muted); }
-.meter { width: 96px; height: 22px; border-radius: 4px; background: var(--wave-bg); border: 1px solid var(--line); }
+output { font: 12px var(--font-mono); width: 38px; flex: none; display: inline-block; color: var(--muted); white-space: nowrap; }
+.speedbtn { width: 66px; flex: none; justify-content: space-between; font: 600 12px var(--font-mono); padding: 0 7px; }
+.speedbtn::after { content: "▾"; font-size: 10px; color: var(--muted); }
+.btn.trainer { width: 104px; flex: none; }
+.btn.trainer.on { font-family: var(--font-mono); font-size: 12px; }
+.pop { position: fixed; z-index: 40; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; width: 330px; box-shadow: 0 14px 40px rgba(0,0,0,.45); display: grid; gap: 10px; }
+.pop h4 { margin: 0; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.pop .presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.pop .presets button { height: auto; padding: 5px 4px; flex-direction: column; gap: 0; line-height: 1.2; position: relative; }
+.pop .presets button b { font: 600 13px var(--font-mono); }
+.pop .presets button small { font-size: 10px; color: var(--muted); }
+.pop .presets button.on small { color: inherit; }
+.pop .presets button .x { position: absolute; top: 1px; right: 4px; font-size: 11px; color: var(--muted); }
+.pop .row { display: flex; gap: 6px; align-items: center; }
+.pop .row input { width: 72px; }
+.meter { width: 80px; height: 22px; border-radius: 4px; background: var(--wave-bg); border: 1px solid var(--line); }
 
 /* ---- timeline ---- */
 .timeline { position: relative; overflow: hidden; background: var(--wave-bg); }
@@ -167,7 +181,8 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
   <div class="group" title="Playback speed without changing pitch or key ( [ / ] , \ resets)">
     <span class="lbl">Speed</span>
     <input type="range" id="speed" min="25" max="150" step="1" value="100">
-    <output id="speedOut">100%</output>
+    <button class="btn speedbtn" id="speedOut" title="Speed presets, custom % and target BPM">100%</button>
+    <button class="btn trainer" id="btnTrainer" title="Speed trainer: ramp the speed up while you practise (P)">Trainer</button>
   </div>
   <div class="group" title="Volume">
     <span class="lbl">Vol</span>
@@ -182,15 +197,20 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
   <canvas class="meter" id="meter" title="Level (input while recording, output otherwise)"></canvas>
   <div class="spacer"></div>
   <div class="group">
-    <button class="btn" id="btnOpen" title="Open audio file (Ctrl+O)">Open</button>
-    <button class="btn primary" id="btnSave" title="Save as WAV (Ctrl+S)">Save WAV</button>
-    <button class="btn" id="btnAudio" title="Audio hardware and options">Audio setup</button>
+    <button class="btn" id="btnAudio" title="Audio hardware and options">Audio</button>
     <button class="btn icon" id="btnHelp" title="Keyboard shortcuts (?)">?</button>
   </div>
 </header>
 
-<!-- Grid / metronome / edit -->
+<!-- File / grid / metronome / edit -->
 <div class="bar">
+  <div class="group">
+    <button class="btn" id="btnNew" title="New: remove the track and start with an empty timeline">New</button>
+    <button class="btn" id="btnOpen" title="Open audio file or session (Ctrl+O)">Open</button>
+    <button class="btn" id="btnSaveSession" title="Save session: audio plus markers, sections, grid, In/Out, speed (Ctrl+Shift+S)">Save session</button>
+    <button class="btn primary" id="btnSave" title="Save as WAV (Ctrl+S)">Save WAV</button>
+  </div>
+  <div class="sep"></div>
   <div class="group" title="Tempo of the grid and metronome">
     <span class="lbl">BPM</span>
     <input type="number" id="bpm" min="20" max="400" step="0.01" value="120">
@@ -271,7 +291,7 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
   <span class="msg" id="stMsg"></span>
 </footer>
 
-<input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac" hidden>
+<input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aac,.lcsession" hidden>
 
 <!-- Audio setup -->
 <dialog id="dlgAudio">
@@ -383,6 +403,7 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
       <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Move cursor by one grid step (<kbd>Shift</kbd>: one bar)</td></tr>
       <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>Previous / next marker or section start</td></tr>
       <tr><td><kbd>[</kbd> <kbd>]</kbd> <kbd>\</kbd></td><td>Slower / faster (5 %) / back to 100 % – pitch and key stay the same</td></tr>
+      <tr><td><kbd>P</kbd></td><td>Speed trainer on / off</td></tr>
     </table>
     <h3>Editing</h3>
     <table>
@@ -394,7 +415,8 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
       <tr><td><kbd>S</kbd></td><td>Add section from In→Out (or the bar at the cursor)</td></tr>
       <tr><td><kbd>F2</kbd> / <kbd>Del</kbd></td><td>Rename / delete the selected marker or section</td></tr>
       <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd>, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Undo / redo</td></tr>
-      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Save WAV / open file</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd></td><td>Save WAV / open file or session</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></td><td>Save session (audio + markers, sections, grid, In/Out, speed)</td></tr>
     </table>
     <h3>Grid &amp; metronome</h3>
     <table>
@@ -414,7 +436,9 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
     <h3>Mouse</h3>
     <table>
       <tr><td>Click waveform</td><td>Set cursor (jumps there while playing)</td></tr>
-      <tr><td>Drag waveform</td><td>Select In→Out; drag the In / Out edges to adjust</td></tr>
+      <tr><td>Drag waveform</td><td>Scrub: the cursor follows the mouse and you hear the audio under it</td></tr>
+      <tr><td>Drag the track's header bar</td><td>Move the whole track on the timeline (snaps to the grid; markers and sections move with it)</td></tr>
+      <tr><td>Drag the IN / OUT flags</td><td>Adjust the In / Out points (set them with <kbd>I</kbd> / <kbd>O</kbd>)</td></tr>
       <tr><td>Double-click waveform</td><td>Inside a section: select it and loop. On a free spot: select the whole track</td></tr>
       <tr><td>Drag ruler</td><td>Scrub (audible). <kbd>Alt</kbd>+drag moves the grid</td></tr>
       <tr><td>Section lane</td><td>Drag on empty space to draw a section; drag a section to move it, its edges to resize; double-click to select and loop; right-click for rename / colour / delete</td></tr>
@@ -426,6 +450,40 @@ kbd { font: 11px var(--font-mono); background: var(--panel-3); border: 1px solid
 </dialog>
 
 <div class="ctx" id="ctxMenu" hidden></div>
+
+<!-- Speed presets -->
+<div class="pop" id="speedPop" hidden>
+  <h4>Speed – % of the original tempo</h4>
+  <div class="presets" id="presetGrid"></div>
+  <h4 id="myPresetsHead">Your presets</h4>
+  <div class="presets" id="myPresetGrid"></div>
+  <div class="row">
+    <input type="number" id="customPct" min="25" max="150" step="1" value="100"><span>%</span>
+    <button class="btn" id="btnCustomSet">Set</button>
+    <button class="btn" id="btnCustomAdd" title="Keep this percentage in your presets">+ Preset</button>
+  </div>
+  <div class="row">
+    <input type="number" id="targetBpm" min="10" max="400" step="0.1"><span>BPM</span>
+    <button class="btn" id="btnBpmSet" title="Play at this tempo (based on the grid BPM)">Play at this tempo</button>
+  </div>
+</div>
+
+<!-- Speed trainer -->
+<dialog id="dlgTrainer" style="width:min(460px, calc(100vw - 32px))">
+  <h2>Speed trainer</h2>
+  <div class="dlg-body">
+    <div class="note">Starts slow and speeds up step by step while the loop (In→Out, or the whole track) plays. Pitch and key stay the same.</div>
+    <div class="field"><label for="trStart">Start speed</label><div class="group"><input type="number" id="trStart" min="25" max="150" step="1"> %</div></div>
+    <div class="field"><label for="trTarget">Target speed</label><div class="group"><input type="number" id="trTarget" min="25" max="150" step="1"> %</div></div>
+    <div class="field"><label for="trStep">Change by</label><div class="group"><input type="number" id="trStep" min="1" max="50" step="1"> %</div></div>
+    <div class="field"><label for="trEvery">Every</label><div class="group"><input type="number" id="trEvery" min="1" max="64" step="1">
+      <select id="trUnit"><option value="loops">loop passes</option><option value="bars">bars</option></select></div></div>
+    <div class="field"><label for="trAt">At target</label>
+      <select id="trAt"><option value="hold">Keep playing at target</option><option value="restart">Start over from start speed</option><option value="stop">Stop playback</option></select></div>
+    <div class="note" id="trSummary"></div>
+  </div>
+  <div class="dlg-foot"><button class="btn" id="trCancel">Close</button><button class="btn" id="trStop">Stop trainer</button><button class="btn primary" id="trGo">Start trainer</button></div>
+</dialog>
 
 <script src="worklet.js"></script>
 <script src="dsp.js"></script>

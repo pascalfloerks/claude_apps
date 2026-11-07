@@ -243,8 +243,8 @@ fn header(request: &Request<'_>, name: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Write a WAV file. The body is the file's bytes; headers carry the file name and,
-/// optionally, a folder. Without a folder a "Save As" dialog asks where to put it.
+/// Write a WAV file or a session (`x-kind: session`, a WAV with the full app state).
+/// The body is the file's bytes; headers carry the file name and, for WAVs, optionally a folder. Without a folder a "Save As" dialog asks where to put it.
 /// Returns the full path, or None when the dialog is cancelled.
 #[tauri::command]
 async fn save_audio_file(app: tauri::AppHandle, request: Request<'_>) -> Result<Option<String>, String> {
@@ -255,17 +255,19 @@ async fn save_audio_file(app: tauri::AppHandle, request: Request<'_>) -> Result<
         .chars()
         .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { '_' } else { c })
         .collect();
-    let name = if name.trim().is_empty() { "Recording.wav".to_string() } else { name };
-    let dir = header(&request, "x-dir");
+    let session = header(&request, "x-kind") == "session";
+    let ext = if session { "lcsession" } else { "wav" };
+    let name = if name.trim().is_empty() { format!("Recording.{ext}") } else { name };
+    let dir = if session { String::new() } else { header(&request, "x-dir") };
 
     let path: PathBuf = if !dir.is_empty() && PathBuf::from(&dir).is_dir() {
         // never overwrite: add " (2)", " (3)" … when the name is taken
         let base = PathBuf::from(&dir);
-        let stem = name.trim_end_matches(".wav").to_string();
+        let stem = name.trim_end_matches(&format!(".{ext}")).to_string();
         let mut p = base.join(&name);
         let mut n = 2;
         while p.exists() {
-            p = base.join(format!("{stem} ({n}).wav"));
+            p = base.join(format!("{stem} ({n}).{ext}"));
             n += 1;
         }
         p
@@ -273,9 +275,9 @@ async fn save_audio_file(app: tauri::AppHandle, request: Request<'_>) -> Result<
         let picked = app
             .dialog()
             .file()
-            .set_title("Save WAV")
+            .set_title(if session { "Save session" } else { "Save WAV" })
             .set_file_name(&name)
-            .add_filter("WAV audio", &["wav"])
+            .add_filter(if session { "Loop Catcher session" } else { "WAV audio" }, &[ext])
             .blocking_save_file();
         let Some(file) = picked else { return Ok(None) };
         file.into_path().map_err(|e| e.to_string())?

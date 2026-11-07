@@ -15,7 +15,10 @@ function lcWorkletModule() {
     constructor() {
       super();
       this.ch = [new Float32Array(0)];
-      this.len = 0;
+      this.dataLen = 0;      // samples of audio
+      this.origin = 0;       // timeline position (samples) where the audio starts
+      this.len = 0;          // timeline end = origin + dataLen
+      this.wrapped = false;
       this.win = new Float32Array(FRAME);
       for (let i = 0; i < FRAME; i++) this.win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / FRAME);
       this.seg = [new Float32Array(FRAME + 2 * SEEK + HOP), new Float32Array(FRAME + 2 * SEEK + HOP)];
@@ -41,10 +44,11 @@ function lcWorkletModule() {
     onMsg(m) {
       switch (m.type) {
         case 'buffer':
-          this.ch = m.channels; this.len = m.channels[0].length;
+          this.ch = m.channels; this.dataLen = m.channels[0].length; this.len = this.origin + this.dataLen;
           this.reset(Math.min(this.pos, this.len));
           break;
-        case 'play': this.playing = true; this.ending = -1; this.reset(m.pos); this.lastBeat = null; break;
+        case 'origin': this.origin = Math.max(0, m.origin | 0); this.len = this.origin + this.dataLen; break;
+        case 'play': this.playing = true; this.wrapped = false; this.ending = -1; this.reset(m.pos); this.lastBeat = null; break;
         case 'stop': this.playing = false; this.scrub = false; break;
         case 'seek': this.reset(m.pos); this.lastBeat = null; break;
         case 'speed': this.speed = Math.max(0.1, Math.min(4, m.speed)); break;
@@ -71,18 +75,19 @@ function lcWorkletModule() {
     // with a short crossfade from the audio just before loopStart into the seam).
     fill(dst, c, start, n) {
       const s = this.ch[c] || this.ch[0];
-      const len = this.len;
+      const len = this.dataLen, org = this.origin;
       const lp = this.loop, ls = this.loopStart, le = this.loopEnd, ll = le - ls;
       const xf = Math.min(XFADE, ls, ll >> 2);
       for (let k = 0; k < n; k++) {
         let i = start + k;
         if (lp && i >= le) i = ls + ((i - le) % ll);
         let v = 0;
-        if (i >= 0 && i < len) v = s[i];
+        const si = i - org;
+        if (si >= 0 && si < len) v = s[si];
         if (lp && xf > 0 && i >= le - xf && i < le) {
           const t = (i - (le - xf)) / xf;
-          const j = ls - xf + (i - (le - xf));
-          v = v * (1 - t) + s[j] * t;
+          const j = ls - xf + (i - (le - xf)) - org;
+          v = v * (1 - t) + (j >= 0 && j < len ? s[j] : 0) * t;
         }
         dst[k] = v;
       }
@@ -175,9 +180,9 @@ function lcWorkletModule() {
           this.scrubPos += this.scrubVel;
           const g = Math.min(1, Math.abs(this.scrubVel) * 3);
           this.scrubGain += (g - this.scrubGain) * 0.005;
-          const p = this.scrubPos, i0 = Math.floor(p), f = p - i0;
+          const p = this.scrubPos - this.origin, i0 = Math.floor(p), f = p - i0;
           let a = 0, b = 0;
-          if (i0 >= 0 && i0 + 1 < this.len) { a = s0[i0] + (s0[i0 + 1] - s0[i0]) * f; b = s1[i0] + (s1[i0 + 1] - s1[i0]) * f; }
+          if (i0 >= 0 && i0 + 1 < this.dataLen) { a = s0[i0] + (s0[i0 + 1] - s0[i0]) * f; b = s1[i0] + (s1[i0 + 1] - s1[i0]) * f; }
           L[i] = a * this.scrubGain; R[i] = b * this.scrubGain;
         }
         this.pos = this.scrubPos;
@@ -187,6 +192,7 @@ function lcWorkletModule() {
           const p = this.outSrc[this.outPos];
           L[i] = this.out[0][this.outPos]; R[i] = this.out[1][this.outPos];
           this.outPos++;
+          if (this.loop && p + 64 < this.pos) this.wrapped = true;
           this.pos = p;
           this.metroAt(p);
           if (cL) cL[i] = this.renderClick();
@@ -205,6 +211,7 @@ function lcWorkletModule() {
         for (let i = 0; i < n; i++) cL[i] = this.renderClick();
         if (cR && cL !== cR) cR.set(cL);
       }
+      if (this.wrapped) { this.wrapped = false; this.port.postMessage({ type: 'wrap' }); }
       this.lastReport += n;
       if (this.lastReport >= 1024 || this.ending === 1) {
         this.lastReport = 0;

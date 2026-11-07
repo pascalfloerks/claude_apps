@@ -14,13 +14,14 @@ const defaults = {
   monitor: false, metroRec: false, detect: true, round: true, returnOnStop: true, stereoView: true,
   vol: 85, pan: 0, metroVol: 60, pattern: '{name}_{date}_{time}', bits: 24, saveMeta: true, saveDir: '', autoSave: false, counter: 1,
   division: '0.5', snap: true, showGrid: true, follow: true,
+  speedPresets: [], trainer: { start: 70, target: 100, step: 5, every: 2, unit: 'loops', atTarget: 'hold' },
 };
 const settings = Object.assign({}, defaults, loadSettings());
 function loadSettings() { try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch (e) { return {}; } }
 function saveSettings() { try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); } catch (e) { /* storage unavailable */ } }
 
 const S = {
-  sr: 48000, channels: null, len: 0,
+  sr: 48000, channels: null, len: 0, trackStart: 0,
   name: 'Recording', fileName: 'Untitled', dirty: false,
   cursor: 0, playing: false, playStart: 0, playPos: 0, lastMsg: null,
   recording: false,
@@ -35,7 +36,8 @@ const S = {
 let uid = 1;
 const SECTION_COLORS = ['#E07A5F', '#5EC3CA', '#81B29A', '#F2CC8F', '#9C89B8', '#F28482', '#6D9DC5', '#C8B560'];
 
-const dur = () => (S.len ? S.len / S.sr : 0);
+const audioDur = () => (S.len ? S.len / S.sr : 0);
+const dur = () => (S.len ? S.trackStart + audioDur() : 0); // timeline end of the track block
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 /* =============================================================================================
@@ -108,15 +110,18 @@ async function updatePlayerData() {
   if (!player) return;
   if (!S.channels) { playData = null; player.port.postMessage({ type: 'buffer', channels: [new Float32Array(1)] }); return; }
   playData = await resample(S.channels, S.sr, ctx.sampleRate);
+  sendOrigin();
   player.port.postMessage({ type: 'buffer', channels: playData });
   sendLoop();
 }
 
 const toCtx = (sec) => Math.round(sec * (ctx ? ctx.sampleRate : S.sr));
 
+function sendOrigin() { if (player) player.port.postMessage({ type: 'origin', origin: toCtx(S.trackStart) }); }
+
 function loopRange() {
   const d = dur();
-  let a = S.inPt != null ? S.inPt : 0, b = S.outPt != null ? S.outPt : d;
+  let a = S.inPt != null ? S.inPt : S.trackStart, b = S.outPt != null ? S.outPt : d;
   if (b < a) [a, b] = [b, a];
   return [clamp(a, 0, d), clamp(b, 0, d)];
 }
@@ -133,8 +138,10 @@ function sendMetro() {
 function sendSpeed() { if (player) player.port.postMessage({ type: 'speed', speed: S.speed }); }
 
 function onPlayerMsg(m) {
+  if (m.type === 'wrap') { trainerOnWrap(); return; }
   if (m.type !== 'pos') return;
   S.lastMsg = { pos: m.pos / ctx.sampleRate, t: m.t };
+  if (m.playing) trainerOnPos(S.lastMsg.pos);
   if (m.ended && S.playing) {
     S.playing = false; S.cursor = settings.returnOnStop ? S.playStart : dur();
     updateTransportUI(); requestDraw();
@@ -158,7 +165,7 @@ async function play() {
   let start = S.cursor;
   const [a, b] = loopRange();
   if (S.loop && (start < a || start >= b - 0.01)) start = a;
-  if (start >= dur() - 0.01) start = S.loop ? a : 0;
+  if (start >= dur() - 0.01) start = S.loop ? a : S.trackStart;
   S.playStart = start; S.cursor = start;
   sendLoop(); sendSpeed(); sendMetro();
   player.port.postMessage({ type: 'play', pos: toCtx(start) });
@@ -414,18 +421,39 @@ function loadTrack(channels, sr, o = {}) {
   S.channels = channels; S.sr = sr; S.len = channels[0].length;
   S.name = o.name || S.name; S.fileName = o.fileName || S.fileName; S.dirty = !!o.dirty;
   S.inPt = S.outPt = null; S.cursor = 0; S.selected = null; S.beatTimes = null;
+  S.trackStart = Math.max(0, o.trackStart || 0);
   S.markers = (o.markers || []).map((m) => ({ id: uid++, time: m.time, name: m.name }));
   S.sections = (o.sections || []).map((s, i) => ({ id: uid++, start: s.start, end: s.end, name: s.name, color: s.color || SECTION_COLORS[i % SECTION_COLORS.length] }));
   if (o.grid) Object.assign(S.grid, o.grid);
   if (o.loop != null) S.loop = o.loop;
   if (o.inPt != null) S.inPt = o.inPt;
   if (o.outPt != null) S.outPt = o.outPt;
+  if (o.cursor != null) S.cursor = o.cursor;
+  if (o.speed) setSpeed(o.speed);
   buildPeaks(channels);
   zoomFit();
   syncGridUI(); updateTransportUI(); updateStatus(); refreshEmpty();
   sendMetro();
   if (ctx) updatePlayerData();
   requestDraw();
+}
+
+// "New": back to an empty canvas
+function newSession() {
+  if (S.recording) return;
+  if (S.dirty && S.channels && !confirm('Discard the current track, its markers and sections?')) return;
+  if (S.playing) stop();
+  trainerStop(true);
+  S.channels = null; S.len = 0; S.trackStart = 0; S.markers = []; S.sections = []; S.inPt = S.outPt = null;
+  S.cursor = 0; S.selected = null; S.beatTimes = null; S.loop = false;
+  S.name = 'Recording'; S.fileName = 'Untitled'; S.dirty = false;
+  S.grid = { bpm: 120, beats: 4, offset: 0 };
+  undoStack.length = 0; redoStack.length = 0;
+  setSpeed(1);
+  if (ctx) updatePlayerData();
+  S.view = { start: 0, spp: 0.01 }; clampView();
+  syncGridUI(); sendMetro(); updateTransportUI(); updateStatus(); refreshEmpty(); requestDraw();
+  setMsg('New empty session.');
 }
 
 function refreshEmpty() { $('emptyHint').hidden = !!(S.channels || S.recording); }
@@ -443,8 +471,14 @@ async function openFile(file) {
     const chans = Array.from({ length: Math.min(2, buf.numberOfChannels) }, (_, i) => buf.getChannelData(i).slice());
     const base = file.name.replace(/\.[^.]+$/, '');
     undoStack.length = 0; redoStack.length = 0;
-    loadTrack(chans, buf.sampleRate, { name: base, fileName: file.name, dirty: false, markers: meta && meta.markers, sections: meta && meta.sections, grid: meta && meta.grid });
-    setMsg(`Opened ${file.name}` + (meta && (meta.markers || meta.sections) ? ' (with markers)' : ''));
+    const isSession = !!(meta && meta.kind === 'session');
+    loadTrack(chans, buf.sampleRate, {
+      name: isSession && meta.name ? meta.name : base, fileName: file.name, dirty: false,
+      markers: meta && meta.markers, sections: meta && meta.sections, grid: meta && meta.grid,
+      ...(isSession ? { trackStart: meta.trackStart, inPt: meta.inPt, outPt: meta.outPt, loop: meta.loop, cursor: meta.cursor, speed: meta.speed } : {}),
+    });
+    if (isSession && meta.metro != null) { S.metro = !!meta.metro; sendMetro(); updateTransportUI(); }
+    setMsg(isSession ? `Opened session ${file.name}` : `Opened ${file.name}` + (meta && (meta.markers || meta.sections) ? ' (with markers)' : ''));
   } catch (e) {
     setMsg('Could not open that file: ' + (e.message || e), true);
   }
@@ -456,7 +490,7 @@ async function openFile(file) {
 const undoStack = [], redoStack = [];
 function snapshot() {
   return {
-    channels: S.channels, sr: S.sr, inPt: S.inPt, outPt: S.outPt, grid: { ...S.grid },
+    channels: S.channels, sr: S.sr, trackStart: S.trackStart, inPt: S.inPt, outPt: S.outPt, grid: { ...S.grid }, beatTimes: S.beatTimes,
     markers: S.markers.map((m) => ({ ...m })), sections: S.sections.map((s) => ({ ...s })),
   };
 }
@@ -464,10 +498,13 @@ function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 60) und
 function restore(s) {
   const audioChanged = s.channels !== S.channels;
   S.channels = s.channels; S.sr = s.sr; S.len = s.channels ? s.channels[0].length : 0;
+  const moved = s.trackStart !== S.trackStart;
+  S.trackStart = s.trackStart || 0; S.beatTimes = s.beatTimes || null;
   S.inPt = s.inPt; S.outPt = s.outPt; S.grid = { ...s.grid };
   S.markers = s.markers.map((m) => ({ ...m })); S.sections = s.sections.map((x) => ({ ...x }));
   S.selected = null; S.cursor = clamp(S.cursor, 0, dur());
   if (audioChanged) { if (S.playing) stop(); if (ctx) updatePlayerData(); zoomFit(); }
+  else if (moved) sendOrigin();
   S.dirty = true;
   syncGridUI(); sendMetro(); sendLoop(); updateStatus(); requestDraw();
 }
@@ -532,14 +569,16 @@ function cropToSelection() {
   if (b - a < 0.05) { setMsg('The In→Out range is too short to crop.', true); return; }
   if (S.playing) stop();
   pushUndo();
-  const s0 = Math.round(a * S.sr), s1 = Math.round(b * S.sr);
+  const s0 = clamp(Math.round((a - S.trackStart) * S.sr), 0, S.len), s1 = clamp(Math.round((b - S.trackStart) * S.sr), 0, S.len);
+  if (s1 - s0 < S.sr * 0.05) { undoStack.pop(); setMsg('The In→Out range does not cover the track.', true); return; }
   S.channels = S.channels.map((c) => c.slice(s0, s1)); S.len = s1 - s0;
-  const d = dur();
-  S.markers = S.markers.filter((m) => m.time >= a && m.time <= b).map((m) => ({ ...m, time: m.time - a }));
-  S.sections = S.sections.filter((s) => s.end > a && s.start < b).map((s) => ({ ...s, start: Math.max(0, s.start - a), end: Math.min(d, s.end - a) }));
-  S.grid.offset = S.grid.offset - a;
-  const bl = barLen(); S.grid.offset = ((S.grid.offset % bl) + bl) % bl;
-  S.inPt = S.outPt = null; S.cursor = 0; S.beatTimes = null;
+  S.trackStart += s0 / S.sr;
+  const ta = S.trackStart, tb = dur();
+  S.markers = S.markers.filter((m) => m.time >= ta && m.time <= tb);
+  S.sections = S.sections.filter((s) => s.end > ta && s.start < tb).map((s) => ({ ...s, start: Math.max(ta, s.start), end: Math.min(tb, s.end) }));
+  if (S.beatTimes) S.beatTimes = S.beatTimes.filter((t) => t >= ta && t <= tb);
+  const d = tb - ta;
+  S.inPt = S.outPt = null; S.cursor = ta;
   buildPeaks(S.channels);
   if (ctx) updatePlayerData();
   zoomFit(); syncGridUI(); sendMetro(); updateStatus(); requestDraw();
@@ -597,11 +636,26 @@ function selectSectionAndLoop(s) {
   else S.cursor = s.start;
   requestDraw();
 }
-function selectAll() { if (!S.channels) return; selectRange(0, dur(), false); S.selected = null; }
+function selectAll() { if (!S.channels) return; selectRange(S.trackStart, dur(), false); S.selected = null; }
+
+// Move the track block (markers, sections and In/Out travel with the audio)
+function moveTrackTo(start) {
+  start = Math.max(0, start);
+  const d = start - S.trackStart;
+  if (Math.abs(d) < 1e-9) return;
+  S.trackStart = start;
+  for (const m of S.markers) m.time += d;
+  for (const x of S.sections) { x.start += d; x.end += d; }
+  if (S.inPt != null) S.inPt += d;
+  if (S.outPt != null) S.outPt += d;
+  if (S.beatTimes) S.beatTimes = S.beatTimes.map((t) => t + d);
+  if (!S.playing) S.cursor = Math.max(0, S.cursor + d);
+  sendOrigin(); sendLoop(); updateStatus(); requestDraw();
+}
 
 function jumpMarker(dir) {
   const t = currentPos();
-  const pts = [0, dur(), ...S.markers.map((m) => m.time), ...S.sections.map((s) => s.start)].sort((a, b) => a - b);
+  const pts = [0, S.trackStart, dur(), ...S.markers.map((m) => m.time), ...S.sections.map((s) => s.start)].sort((a, b) => a - b);
   let target = null;
   if (dir > 0) target = pts.find((p) => p > t + 0.01);
   else for (const p of pts) if (p < t - 0.05) target = p;
@@ -644,8 +698,9 @@ async function detectBeats(auto = false) {
   if (res.error) { setMsg(res.error, true); return; }
   pushUndo();
   S.grid.bpm = Math.round(res.bpm * 100) / 100;
-  S.grid.offset = Math.round(res.offset * 10000) / 10000;
-  S.beatTimes = res.beatTimes;
+  const bl = 60 / S.grid.bpm * S.grid.beats, off = res.offset + S.trackStart;
+  S.grid.offset = Math.round((((off % bl) + bl) % bl) * 10000) / 10000;
+  S.beatTimes = res.beatTimes.map((t) => t + S.trackStart);
   syncGridUI(); sendMetro(); requestDraw();
   const conf = res.confidence > 0.6 ? 'high' : res.confidence > 0.3 ? 'medium' : 'low';
   setMsg(`${auto ? 'Beats detected' : 'Detected'}: ${S.grid.bpm} BPM, bar 1 at ${S.grid.offset.toFixed(3)} s (confidence ${conf}). Use ÷2 / ×2 or "Bar 1 here" to correct.`);
@@ -657,8 +712,8 @@ async function detectBeats(auto = false) {
 function sanitize(s) { return s.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '_').replace(/\s+$/,'').replace(/^\.+/, '') || 'Recording'; }
 function buildFileName(pattern, name, range) {
   const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
-  const [a, b] = range === 'sel' ? loopRange() : [0, dur()];
-  const len = b - a;
+  const [a, b] = range === 'sel' ? loopRange() : [S.trackStart, dur()];
+  const len = Math.max(0, Math.min(b, dur()) - Math.max(a, S.trackStart));
   const out = pattern
     .replace(/\{name\}/g, name || 'Recording')
     .replace(/\{date\}/g, `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`)
@@ -699,8 +754,10 @@ async function saveWav(o = {}) {
     settings.pattern = pattern; settings.bits = +$('saveBits').value; settings.saveMeta = $('saveMeta').checked; saveSettings();
   }
   const fileName = buildFileName(pattern, name, range);
-  const [a, b] = range === 'sel' ? loopRange() : [0, dur()];
-  const s0 = Math.round(a * S.sr), s1 = Math.round(b * S.sr);
+  let [a, b] = range === 'sel' ? loopRange() : [S.trackStart, dur()];
+  a = clamp(a, S.trackStart, dur()); b = clamp(b, S.trackStart, dur());
+  if (b - a < 0.01) { setMsg('The In→Out range does not cover the track.', true); return false; }
+  const s0 = Math.round((a - S.trackStart) * S.sr), s1 = Math.round((b - S.trackStart) * S.sr);
   const chans = S.channels.map((c) => c.subarray(s0, s1));
   let meta = null;
   if (settings.saveMeta) {
@@ -734,6 +791,149 @@ async function saveWav(o = {}) {
     setMsg('Saving failed: ' + (e.message || e), true);
     return false;
   }
+}
+
+// A session is a WAV file (32-bit float, lossless) that also carries the complete state:
+// track position, grid, markers, sections, In/Out, loop, speed and metronome.
+async function saveSession() {
+  if (!S.channels) { setMsg('Nothing to save yet – record or open something first.', true); return false; }
+  if (S.recording) return false;
+  const state = {
+    kind: 'session', name: S.name, trackStart: S.trackStart, grid: { ...S.grid },
+    markers: S.markers.map((m) => ({ time: m.time, name: m.name })),
+    sections: S.sections.map((x) => ({ start: x.start, end: x.end, name: x.name, color: x.color })),
+    inPt: S.inPt, outPt: S.outPt, loop: S.loop, cursor: S.cursor, speed: S.speed, metro: S.metro,
+  };
+  // the cue points written for other programs are relative to the audio, so pass shifted copies for those
+  const bytes = lcEncodeWav(S.channels, S.sr, 32, state, -S.trackStart);
+  const fileName = sanitize(S.name) + '.lcsession';
+  try {
+    let savedAs = fileName;
+    if (TAURI) {
+      const path = await invoke('save_audio_file', bytes, { headers: { 'x-file-name': encodeURIComponent(fileName), 'x-dir': '', 'x-kind': 'session' } });
+      if (!path) { setMsg('Save cancelled.'); return false; }
+      savedAs = path;
+    } else downloadBytes(bytes, fileName, 'application/octet-stream');
+    S.dirty = false; S.fileName = savedAs.split(/[\\/]/).pop(); updateStatus();
+    setMsg(`Session saved: ${savedAs}`);
+    return true;
+  } catch (e) { setMsg('Saving the session failed: ' + (e.message || e), true); return false; }
+}
+function downloadBytes(bytes, name, type) {
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const aEl = document.createElement('a'); aEl.href = url; aEl.download = name; document.body.appendChild(aEl); aEl.click(); aEl.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/* =============================================================================================
+   Speed presets & trainer
+============================================================================================= */
+const BUILTIN_PRESETS = [50, 60, 70, 75, 80, 85, 90, 95, 100, 105, 110, 125];
+function fmtBpm(pct) { return `${Math.round(S.grid.bpm * pct) / 100} BPM`; }
+function renderPresets() {
+  const cur = Math.round(S.speed * 100);
+  const mk = (pct, mine) => {
+    const b = document.createElement('button'); b.className = 'btn' + (pct === cur ? ' on' : '');
+    b.innerHTML = `<b>${pct}%</b><small>${fmtBpm(pct)}</small>`;
+    b.onclick = (e) => { if (e.target.classList.contains('x')) return; setSpeed(pct / 100); renderPresets(); };
+    if (mine) {
+      const x = document.createElement('span'); x.className = 'x'; x.textContent = '×'; x.title = 'Remove preset';
+      x.onclick = () => { settings.speedPresets = settings.speedPresets.filter((p) => p !== pct); saveSettings(); renderPresets(); };
+      b.append(x);
+    }
+    return b;
+  };
+  $('presetGrid').replaceChildren(...BUILTIN_PRESETS.map((p) => mk(p, false)));
+  const mine = settings.speedPresets.slice().sort((a, b) => a - b);
+  $('myPresetGrid').replaceChildren(...mine.map((p) => mk(p, true)));
+  $('myPresetsHead').hidden = $('myPresetGrid').hidden = !mine.length;
+  $('customPct').value = cur;
+  $('targetBpm').value = Math.round(S.grid.bpm * S.speed * 10) / 10;
+}
+function toggleSpeedPop() {
+  const pop = $('speedPop');
+  if (!pop.hidden) { pop.hidden = true; return; }
+  renderPresets();
+  pop.hidden = false;
+  const r = $('speedOut').getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left - 120, innerWidth - pop.offsetWidth - 8)) + 'px';
+  pop.style.top = (r.bottom + 6) + 'px';
+}
+
+const TR = { running: false, count: 0, acc: 0, lastPos: null, done: false };
+function trainerCfg() { return settings.trainer; }
+function trainerLabel() {
+  const c = trainerCfg();
+  return `${c.start}% → ${c.target}%, ${c.target >= c.start ? '+' : '−'}${c.step}% every ${c.every} ${c.unit === 'bars' ? (c.every === 1 ? 'bar' : 'bars') : (c.every === 1 ? 'loop' : 'loops')}`;
+}
+function openTrainer() {
+  const c = trainerCfg();
+  $('trStart').value = c.start; $('trTarget').value = c.target; $('trStep').value = c.step; $('trEvery').value = c.every;
+  $('trUnit').value = c.unit; $('trAt').value = c.atTarget;
+  $('trStop').hidden = !TR.running;
+  updateTrainerSummary();
+  $('dlgTrainer').showModal();
+}
+function readTrainerForm() {
+  settings.trainer = {
+    start: clamp(Math.round(+$('trStart').value || 70), 25, 150), target: clamp(Math.round(+$('trTarget').value || 100), 25, 150),
+    step: clamp(Math.round(+$('trStep').value || 5), 1, 50), every: clamp(Math.round(+$('trEvery').value || 1), 1, 64),
+    unit: $('trUnit').value, atTarget: $('trAt').value,
+  };
+  saveSettings();
+}
+function updateTrainerSummary() {
+  readTrainerForm();
+  const c = trainerCfg(), steps = Math.ceil(Math.abs(c.target - c.start) / c.step);
+  let extra = '';
+  if (c.unit === 'loops') { const [a, b] = loopRange(); if (S.channels && b > a) { let t = 0, sp = c.start; for (let i = 0; i <= steps; i++) { t += c.every * (b - a) / (sp / 100); sp = Math.min(c.target, sp + c.step); } extra = ` – about ${fmtTime(t, false)} until the target`; } }
+  $('trSummary').textContent = `${trainerLabel()}: ${steps} step${steps === 1 ? '' : 's'}${extra}.`;
+}
+async function trainerStart() {
+  if (!S.channels) { setMsg('Record or open a track first.', true); return; }
+  const c = trainerCfg();
+  TR.running = true; TR.count = 0; TR.acc = 0; TR.lastPos = null; TR.done = false;
+  setSpeed(c.start / 100);
+  if (c.unit === 'loops' && !S.loop) { S.loop = true; sendLoop(); }
+  if (S.playing) stop();
+  S.cursor = loopRange()[0];
+  await play();
+  updateTransportUI();
+  setMsg(`Trainer: ${trainerLabel()}.`);
+}
+function trainerStop(silent) {
+  if (!TR.running) return;
+  TR.running = false; updateTransportUI();
+  if (!silent) setMsg('Trainer stopped.');
+}
+function toggleTrainer() { TR.running ? trainerStop() : trainerStart(); }
+function trainerStep() {
+  const c = trainerCfg(), cur = Math.round(S.speed * 100), dir = c.target >= c.start ? 1 : -1;
+  if (TR.done || (dir > 0 ? cur >= c.target : cur <= c.target)) {
+    if (c.atTarget === 'restart') { setSpeed(c.start / 100); TR.done = false; setMsg(`Trainer: back to ${c.start}%.`); }
+    else if (c.atTarget === 'stop') { stop(); trainerStop(true); setMsg(`Trainer finished at ${cur}%.`); }
+    else TR.done = true;
+    return;
+  }
+  const next = dir > 0 ? Math.min(c.target, cur + c.step) : Math.max(c.target, cur - c.step);
+  setSpeed(next / 100);
+  updateTransportUI();
+  setMsg(`Trainer: ${next}% (${fmtBpm(next)})${next === c.target ? ' – target reached' : ''}.`);
+}
+function trainerOnWrap() {
+  if (!TR.running || trainerCfg().unit !== 'loops') return;
+  if (++TR.count >= trainerCfg().every) { TR.count = 0; trainerStep(); }
+}
+function trainerOnPos(pos) {
+  if (!TR.running || trainerCfg().unit !== 'bars') { TR.lastPos = pos; return; }
+  if (TR.lastPos != null) {
+    let d = pos - TR.lastPos;
+    if (d < 0 && S.loop) { const [a, b] = loopRange(); d = (b - TR.lastPos) + (pos - a); }
+    if (d > 0 && d < 2) TR.acc += d;
+    const need = trainerCfg().every * barLen();
+    if (TR.acc >= need) { TR.acc -= need; trainerStep(); }
+  }
+  TR.lastPos = pos;
 }
 
 /* =============================================================================================
@@ -787,7 +987,8 @@ function setSrcNote(t, err) { const n = $('srcNote'); n.textContent = t; n.style
 ============================================================================================= */
 const tl = $('timeline'), cvB = $('cvBack'), cvF = $('cvFront'), cvO = $('cvOverview');
 const gB = cvB.getContext('2d'), gF = cvF.getContext('2d'), gO = cvO.getContext('2d');
-const RULER = 26, SECT = 24, MARK = 20, WAVE_TOP = RULER + SECT + MARK;
+const RULER = 26, SECT = 24, MARK = 20, WAVE_TOP = RULER + SECT + MARK, HDR = 18;
+let trackHover = false;
 let W = 0, H = 0, DPR = 1, dirty = true, colors = {};
 
 function readColors() {
@@ -867,10 +1068,19 @@ function drawBack() {
   const t0 = tOf(0), t1 = tOf(W);
   const waveH = H - WAVE_TOP;
 
-  // track area
+  // track block
   if (d > 0) {
-    const xa = Math.max(0, xOf(0)), xb = Math.min(W, xOf(d));
-    g.fillStyle = colors.bg; g.globalAlpha = 0.35; g.fillRect(xa, WAVE_TOP, xb - xa, waveH); g.globalAlpha = 1;
+    const ts = S.recording ? 0 : S.trackStart;
+    const xa = xOf(ts), xb = xOf(d);
+    g.fillStyle = colors['panel-2']; g.globalAlpha = 0.55; roundRect(g, xa, WAVE_TOP + 2, xb - xa, waveH - 4, 6); g.fill(); g.globalAlpha = 1;
+    // header bar: drag it to move the track
+    const hover = trackHover && !S.recording;
+    g.fillStyle = S.recording ? colors.rec : colors.wave; g.globalAlpha = hover ? 0.55 : 0.32;
+    roundRect(g, xa, WAVE_TOP + 2, xb - xa, HDR, 6); g.fill(); g.globalAlpha = 1;
+    g.save(); g.beginPath(); g.rect(Math.max(xa, 0), WAVE_TOP, Math.max(0, Math.min(xb, W) - Math.max(xa, 0) - 4), HDR + 2); g.clip();
+    g.fillStyle = colors.ink; g.font = '600 11px "IBM Plex Sans", sans-serif'; g.textBaseline = 'middle';
+    const label = S.recording ? '● Recording' : `${S.name}  ·  ${fmtTime(audioDur())}${S.trackStart > 0 ? '  ·  starts ' + fmtTime(S.trackStart) : ''}`;
+    g.fillText(label, Math.max(xa, 0) + 8, WAVE_TOP + 2 + HDR / 2); g.restore();
   }
 
   // section tints in the waveform
@@ -903,12 +1113,12 @@ function drawBack() {
       if (t == null) continue;
       const x = Math.round(xOf(t)) + 0.5;
       if (x < -20 || x > W + 20) continue;
-      g.beginPath(); g.moveTo(x, RULER); g.lineTo(x, H); g.stroke();
+      g.beginPath(); g.moveTo(x, RULER - 13); g.lineTo(x, H); g.stroke();
       g.fillStyle = colors['sel-edge']; g.font = '600 9px "IBM Plex Mono", monospace';
       const tw = g.measureText(lab).width + 6;
       const lx = lab === 'IN' ? x : x - tw;
-      g.fillRect(lx, WAVE_TOP, tw, 13); g.fillStyle = colors['accent-ink'] || '#000'; g.fillStyle = '#1C1204';
-      g.fillText(lab, lx + 3, WAVE_TOP + 7);
+      g.fillRect(lx, RULER - 13, tw, 13); g.fillStyle = '#1C1204';
+      g.fillText(lab, lx + 3, RULER - 6);
     }
   }
 
@@ -1028,16 +1238,16 @@ function drawGrid(g, t0, t1) {
 function waveLanes() {
   const nch = S.recording ? (+settings.recChannels === 1 ? 1 : 2) : (S.channels ? S.channels.length : 1);
   const split = nch > 1 && settings.stereoView;
-  const top = WAVE_TOP + 6, h = H - WAVE_TOP - 12;
+  const top = WAVE_TOP + HDR + 8, h = H - WAVE_TOP - HDR - 14;
   if (!split) return [{ ch: nch > 1 ? 'mix' : 0, y: top, h }];
   const gap = 6, lh = (h - gap) / 2;
   return [{ ch: 0, y: top, h: lh }, { ch: 1, y: top + lh + gap, h: lh }];
 }
 
 function drawWave(g) {
-  const levels = buildPeaks(S.channels), raw = S.channels, sr = S.sr;
+  const levels = buildPeaks(S.channels), raw = S.channels, sr = S.sr, ts = S.trackStart;
   const lanes = waveLanes();
-  const xa = Math.max(0, Math.floor(xOf(0))), xb = Math.min(W, Math.ceil(xOf(dur())));
+  const xa = Math.max(0, Math.floor(xOf(ts))), xb = Math.min(W, Math.ceil(xOf(dur())));
   for (const lane of lanes) {
     const mid = lane.y + lane.h / 2, amp = lane.h / 2;
     g.strokeStyle = colors.line; g.lineWidth = 1; g.beginPath(); g.moveTo(xa, Math.round(mid) + 0.5); g.lineTo(xb, Math.round(mid) + 0.5); g.stroke();
@@ -1046,10 +1256,10 @@ function drawWave(g) {
     if (spp < 1.5) {
       // sample-level: draw a line
       g.strokeStyle = colors.wave; g.lineWidth = 1.25; g.beginPath();
-      const s0 = Math.max(0, Math.floor(tOf(0) * sr)), s1 = Math.min(S.len - 1, Math.ceil(tOf(W) * sr));
+      const s0 = Math.max(0, Math.floor((tOf(0) - ts) * sr)), s1 = Math.min(S.len - 1, Math.ceil((tOf(W) - ts) * sr));
       for (let i = s0; i <= s1; i++) {
         const v = lane.ch === 'mix' ? (raw[0][i] + raw[1][i]) / 2 : raw[lane.ch][i];
-        const x = xOf(i / sr), y = mid - v * amp;
+        const x = xOf(ts + i / sr), y = mid - v * amp;
         if (i === s0) g.moveTo(x, y); else g.lineTo(x, y);
       }
       g.stroke();
@@ -1057,7 +1267,7 @@ function drawWave(g) {
     }
     g.beginPath();
     for (let x = xa; x < xb; x++) {
-      const s0 = tOf(x) * sr, s1 = tOf(x + 1) * sr;
+      const s0 = (tOf(x) - ts) * sr, s1 = (tOf(x + 1) - ts) * sr;
       let mm;
       if (lane.ch === 'mix') {
         const a = colMinMax(0, s0, s1, levels, raw), b = colMinMax(1, s0, s1, levels, raw);
@@ -1145,7 +1355,7 @@ function drawOverview() {
   } else if (S.channels) {
     const levels = buildPeaks(S.channels);
     for (let x = 0; x < w; x++) {
-      const s0 = (x / w) * total * S.sr, s1 = ((x + 1) / w) * total * S.sr;
+      const s0 = ((x / w) * total - S.trackStart) * S.sr, s1 = (((x + 1) / w) * total - S.trackStart) * S.sr;
       let hi = 0;
       for (let c = 0; c < S.channels.length; c++) { const mm = colMinMax(c, s0, s1, levels, null); if (mm) hi = Math.max(hi, mm[1], -mm[0]); }
       if (hi > 0) g.rect(x, mid - hi * amp, 1, Math.max(1, 2 * hi * amp));
@@ -1247,7 +1457,35 @@ function sectionAtTime(t) {
 
 function localXY(e) { const r = cvF.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
 
-cvF.addEventListener('pointerdown', async (e) => {
+function hitIOTab(x, y) {
+  if (y < RULER - 14 || y > RULER) return null;
+  for (const [which, pt, lab] of [['in', S.inPt, 'IN'], ['out', S.outPt, 'OUT']]) {
+    if (pt == null) continue;
+    const px = xOf(pt), w = lab === 'IN' ? 18 : 24;
+    if (lab === 'IN' ? x >= px - 3 && x <= px + w : x >= px - w && x <= px + 3) return which;
+  }
+  return null;
+}
+const inTrackHeader = (x, y) => S.channels && y >= WAVE_TOP && y <= WAVE_TOP + HDR + 3 && x >= xOf(S.trackStart) && x <= xOf(dur());
+
+// Scrubbing: the cursor follows the mouse and the audio under it plays.
+async function scrubBegin(t) {
+  await ensureAudio();
+  scrubWasPlaying = S.playing;
+  if (S.playing) { S.cursor = currentPos(); player.port.postMessage({ type: 'stop' }); S.playing = false; updateTransportUI(); }
+  scrubbing = true;
+  S.cursor = clamp(t, 0, dur());
+  player.port.postMessage({ type: 'scrubStart', pos: toCtx(S.cursor) });
+}
+function scrubEnd() {
+  if (!scrubbing) return;
+  player.port.postMessage({ type: 'scrubEnd' });
+  scrubbing = false;
+  if (scrubWasPlaying) play();
+  requestDraw();
+}
+
+cvF.addEventListener('pointerdown', (e) => {
   hideCtx();
   if (!S.channels || S.recording) return;
   if (e.button === 2) return;
@@ -1256,14 +1494,10 @@ cvF.addEventListener('pointerdown', async (e) => {
   const t = tOf(x), zone = zoneAt(y);
   cvF.setPointerCapture(e.pointerId);
   if (zone === 'ruler') {
+    const io = hitIOTab(x, y);
+    if (io) { drag = { type: 'ioEdge', which: io, undo: false }; return; }
     if (e.altKey) { drag = { type: 'grid', x0: x, off0: S.grid.offset, undo: false }; return; }
-    await ensureAudio();
-    scrubWasPlaying = S.playing;
-    if (S.playing) { player.port.postMessage({ type: 'stop' }); S.playing = false; }
-    scrubbing = true;
-    S.cursor = clamp(t, 0, dur());
-    player.port.postMessage({ type: 'scrubStart', pos: toCtx(S.cursor) });
-    drag = { type: 'scrub' };
+    drag = { type: 'scrub', x0: x, started: false };
     return;
   }
   if (zone === 'sections') {
@@ -1282,24 +1516,41 @@ cvF.addEventListener('pointerdown', async (e) => {
     else { S.selected = null; drag = { type: 'none' }; }
     requestDraw(); return;
   }
-  // waveform
-  for (const [which, pt] of [['in', S.inPt], ['out', S.outPt]]) {
-    if (pt != null && Math.abs(xOf(pt) - x) <= 5) { drag = { type: 'ioEdge', which, undo: false }; return; }
-  }
-  drag = { type: 'select', x0: x, a: t, moved: false, ev: e };
+  // waveform: the header bar moves the track, everything else scrubs
+  if (inTrackHeader(x, y)) { drag = { type: 'moveTrack', t0: t, start0: S.trackStart, undo: false, moved: false }; cvF.style.cursor = 'grabbing'; return; }
+  drag = { type: 'scrub', x0: x, started: false };
 });
 
 cvF.addEventListener('pointermove', (e) => {
   const [x, y] = localXY(e);
   hoverX = y >= WAVE_TOP ? x : null;
-  if (!drag) { updateCursorStyle(x, y); return; }
+  if (!drag) {
+    const th = inTrackHeader(x, y);
+    if (th !== trackHover) { trackHover = th; requestDraw(); }
+    updateCursorStyle(x, y); return;
+  }
   const t = tOf(x);
   switch (drag.type) {
     case 'pan': S.view.start = drag.start0 - (e.clientX - drag.x0) * S.view.spp; clampView(); requestDraw(); break;
     case 'scrub':
+      if (!drag.started) {
+        if (Math.abs(x - drag.x0) < 3) break;
+        drag.started = true; S.selected = null;
+        scrubBegin(t);
+      }
       S.cursor = clamp(t, 0, dur());
-      player.port.postMessage({ type: 'scrubMove', pos: toCtx(S.cursor) });
+      if (scrubbing) player.port.postMessage({ type: 'scrubMove', pos: toCtx(S.cursor) });
+      // keep the cursor in view when dragging past the edges
+      if (x > W - 10) { S.view.start += S.view.spp * 12; clampView(); requestDraw(); }
+      else if (x < 10) { S.view.start -= S.view.spp * 12; clampView(); requestDraw(); }
       break;
+    case 'moveTrack': {
+      if (!drag.moved && Math.abs(t - drag.t0) / S.view.spp < 3) break;
+      if (!drag.undo) { pushUndo(); drag.undo = true; }
+      drag.moved = true;
+      moveTrackTo(snap(Math.max(0, drag.start0 + (t - drag.t0)), e));
+      break;
+    }
     case 'grid': {
       if (!drag.undo) { pushUndo(); drag.undo = true; }
       setOffset(drag.off0 + (x - drag.x0) * S.view.spp, false); break;
@@ -1310,7 +1561,7 @@ cvF.addEventListener('pointermove', (e) => {
       if (!drag.undo) { pushUndo(); drag.undo = true; drag.s = S.sections.find((s) => s.id === drag.s.id); }
       drag.moved = true;
       const len = drag.b0 - drag.a0;
-      let a = snap(drag.a0 + (t - drag.t0), e); a = clamp(a, 0, dur() - len);
+      let a = snap(drag.a0 + (t - drag.t0), e); a = clamp(a, 0, Math.max(0, dur() - len));
       drag.s.start = a; drag.s.end = a + len; requestDraw(); break;
     }
     case 'sectionEdge': {
@@ -1332,13 +1583,6 @@ cvF.addEventListener('pointermove', (e) => {
       if (drag.which === 'in') S.inPt = v; else S.outPt = v;
       afterSelChange(); break;
     }
-    case 'select': {
-      if (!drag.moved && Math.abs(x - drag.x0) < 4) break;
-      if (!drag.moved) { pushUndo(); drag.moved = true; }
-      const a = clamp(snap(drag.a, e), 0, dur()), b = clamp(snap(t, e), 0, dur());
-      S.inPt = Math.min(a, b); S.outPt = Math.max(a, b);
-      afterSelChange(); break;
-    }
   }
   requestDraw();
 });
@@ -1350,9 +1594,12 @@ function endDrag(e) {
   const d = drag; drag = null;
   switch (d.type) {
     case 'scrub':
-      player.port.postMessage({ type: 'scrubEnd' });
-      scrubbing = false;
-      if (scrubWasPlaying) play();
+      if (d.started) scrubEnd();
+      else { S.selected = null; seek(snap(clamp(t, 0, dur()), e)); }
+      break;
+    case 'moveTrack':
+      if (d.moved) setMsg(`Track starts at ${fmtTime(S.trackStart)} (${barBeat(S.trackStart)}).`);
+      updateCursorStyle(...localXY(e));
       break;
     case 'newSection':
       if (d.moved) addSection(clamp(Math.min(d.a, d.b), 0, dur()), clamp(Math.max(d.a, d.b), 0, dur()));
@@ -1363,21 +1610,17 @@ function endDrag(e) {
       else S.markers.sort((a, b) => a.time - b.time);
       break;
     case 'sectionMove':
-      if (!d.moved) { /* click selects */ }
       S.sections.sort((a, b) => a.start - b.start);
       break;
     case 'ioEdge':
       if (S.inPt != null && S.outPt != null && S.outPt < S.inPt) [S.inPt, S.outPt] = [S.outPt, S.inPt];
       afterSelChange(); break;
-    case 'select':
-      if (!d.moved) { S.selected = null; seek(snap(clamp(t, 0, dur()), e)); }
-      break;
   }
   requestDraw();
 }
 cvF.addEventListener('pointerup', endDrag);
 cvF.addEventListener('pointercancel', endDrag);
-cvF.addEventListener('pointerleave', () => { hoverX = null; });
+cvF.addEventListener('pointerleave', () => { hoverX = null; if (trackHover) { trackHover = false; requestDraw(); } });
 
 cvF.addEventListener('dblclick', (e) => {
   if (!S.channels || S.recording) return;
@@ -1457,10 +1700,11 @@ function updateCursorStyle(x, y) {
   if (!S.channels) { cvF.style.cursor = 'default'; return; }
   const z = zoneAt(y);
   let c = 'text';
-  if (z === 'ruler') c = 'ew-resize';
+  if (z === 'ruler') c = hitIOTab(x, y) ? 'col-resize' : 'ew-resize';
   else if (z === 'sections') { const h = hitSection(x); c = h ? (h.edge ? 'col-resize' : 'grab') : 'copy'; }
   else if (z === 'markers') c = hitMarker(x) ? 'grab' : 'default';
-  else if ((S.inPt != null && Math.abs(xOf(S.inPt) - x) <= 5) || (S.outPt != null && Math.abs(xOf(S.outPt) - x) <= 5)) c = 'col-resize';
+  else if (inTrackHeader(x, y)) c = 'grab';
+  else c = 'ew-resize';
   cvF.style.cursor = c;
 }
 
@@ -1509,6 +1753,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && $('dlgSave').open && e.target.tagName === 'INPUT' && e.target.type === 'text') { e.preventDefault(); $('btnSaveGo').click(); }
     return;
   }
+  if (e.key === 'Escape' && !$('speedPop').hidden) { $('speedPop').hidden = true; e.preventDefault(); return; }
   if (isTyping(e)) { if (e.key === 'Escape' || e.key === 'Enter') e.target.blur(); return; }
   const k = e.key, ctrl = e.ctrlKey || e.metaKey, lower = k.length === 1 ? k.toLowerCase() : k;
   const pos = currentPos();
@@ -1516,6 +1761,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl) {
     if (lower === 'z' && !e.shiftKey) undo();
     else if ((lower === 'z' && e.shiftKey) || lower === 'y') redo();
+    else if (lower === 's' && e.shiftKey) saveSession();
     else if (lower === 's') openSaveDialog();
     else if (lower === 'o') $('fileInput').click();
     else if (lower === 'k') cropToSelection();
@@ -1548,6 +1794,7 @@ document.addEventListener('keydown', (e) => {
   else if (lower === 'b') detectBeats();
   else if (lower === 'd') { if (S.channels) { setOffset(pos); setMsg(`Bar 1 now starts at ${fmtTime(S.grid.offset)}.`); } }
   else if (lower === 't') tapTempo();
+  else if (lower === 'p') toggleTrainer();
   else if (lower === 'z') zoomFit();
   else if (lower === 'f') toggleFollow();
   else if (k === '+' || k === '=') zoomBy(0.66);
@@ -1574,6 +1821,7 @@ function setSpeed(v) {
   $('speed').value = Math.round(S.speed * 100);
   $('speedOut').textContent = Math.round(S.speed * 100) + '%';
   sendSpeed();
+  if (!$('speedPop').hidden) renderPresets();
 }
 
 function updateTransportUI() {
@@ -1586,8 +1834,11 @@ function updateTransportUI() {
   $('btnGrid').classList.toggle('on', settings.showGrid);
   $('btnFollow').classList.toggle('on', settings.follow);
   const has = !!S.channels && !S.recording;
-  for (const id of ['btnPlay', 'btnIn', 'btnOut', 'btnClearIO', 'btnCrop', 'btnMarker', 'btnSection', 'btnDetect', 'btnBarHere', 'btnSave']) $(id).disabled = !has && !(id === 'btnPlay' && S.recording);
-  $('btnOpen').disabled = S.recording;
+  for (const id of ['btnPlay', 'btnIn', 'btnOut', 'btnClearIO', 'btnCrop', 'btnMarker', 'btnSection', 'btnDetect', 'btnBarHere', 'btnSave', 'btnTrainer']) $(id).disabled = !has && !(id === 'btnPlay' && S.recording);
+  $('btnOpen').disabled = S.recording; $('btnNew').disabled = S.recording;
+  $('btnSaveSession').disabled = !has;
+  $('btnTrainer').classList.toggle('on', TR.running);
+  $('btnTrainer').textContent = TR.running ? `Trainer ${Math.round(S.speed * 100)}%` : 'Trainer';
   updateUndoUI();
 }
 
@@ -1598,7 +1849,7 @@ function syncGridUI() {
 }
 
 function updateStatus() {
-  $('stLen').textContent = fmtTime(dur());
+  $('stLen').textContent = fmtTime(audioDur());
   if (S.inPt != null || S.outPt != null) { const [a, b] = loopRange(); $('stSel').textContent = `${fmtTime(a)} → ${fmtTime(b)} (${fmtTime(b - a)})`; }
   else $('stSel').textContent = '–';
   $('stFile').textContent = S.fileName + (S.dirty ? ' •' : '');
@@ -1673,6 +1924,23 @@ function wire() {
   $('btnFollow').onclick = toggleFollow;
 
   $('btnOpen').onclick = () => $('fileInput').click();
+  $('btnNew').onclick = newSession;
+  $('btnSaveSession').onclick = saveSession;
+  $('speedOut').onclick = (e) => { e.stopPropagation(); toggleSpeedPop(); };
+  document.addEventListener('pointerdown', (e) => { if (!$('speedPop').hidden && !$('speedPop').contains(e.target) && e.target !== $('speedOut')) $('speedPop').hidden = true; });
+  $('btnCustomSet').onclick = () => setSpeed(clamp(+$('customPct').value || 100, 25, 150) / 100);
+  $('btnCustomAdd').onclick = () => {
+    const v = Math.round(clamp(+$('customPct').value || 100, 25, 150));
+    if (!settings.speedPresets.includes(v) && !BUILTIN_PRESETS.includes(v)) { settings.speedPresets.push(v); saveSettings(); }
+    setSpeed(v / 100); renderPresets();
+  };
+  $('btnBpmSet').onclick = () => { const b = +$('targetBpm').value; if (b > 0) setSpeed(b / S.grid.bpm); };
+  for (const id of ['customPct', 'targetBpm']) $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $(id === 'customPct' ? 'btnCustomSet' : 'btnBpmSet').click(); } });
+  $('btnTrainer').onclick = openTrainer;
+  for (const id of ['trStart', 'trTarget', 'trStep', 'trEvery', 'trUnit', 'trAt']) $(id).addEventListener('input', updateTrainerSummary);
+  $('trCancel').onclick = () => $('dlgTrainer').close();
+  $('trStop').onclick = () => { trainerStop(); $('dlgTrainer').close(); };
+  $('trGo').onclick = () => { readTrainerForm(); $('dlgTrainer').close(); trainerStart(); };
   $('fileInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; openFile(f); };
   $('btnSave').onclick = openSaveDialog;
   $('btnHelp').onclick = () => $('dlgHelp').showModal();

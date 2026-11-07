@@ -181,7 +181,7 @@ function lcDetectBeats(channels, sr, opts, onProgress) {
    as regions (labelled text with a length) – readable by most DAWs and editors – and the full
    Loop Catcher state (grid, markers, sections, colours) as JSON in the INFO comment.
 --------------------------------------------------------------------------------------------- */
-function lcEncodeWav(channels, sr, bits, meta) {
+function lcEncodeWav(channels, sr, bits, meta, cueShift = 0) {
   const nch = channels.length, len = channels[0].length;
   const float = bits === 32, bps = bits / 8;
   const dataBytes = len * nch * bps;
@@ -217,8 +217,10 @@ function lcEncodeWav(channels, sr, bits, meta) {
   // cue points and labels
   const markers = (meta && meta.markers) || [], sections = (meta && meta.sections) || [];
   const cues = [];
-  markers.forEach((m) => cues.push({ pos: Math.round(m.time * sr), name: m.name || 'Marker' }));
-  sections.forEach((s) => cues.push({ pos: Math.round(s.start * sr), name: s.name || 'Section', length: Math.round((s.end - s.start) * sr) }));
+  // cueShift converts the meta's time base to positions in this file (sessions keep timeline times in the JSON)
+  markers.forEach((m) => cues.push({ pos: Math.round((m.time + cueShift) * sr), name: m.name || 'Marker' }));
+  sections.forEach((s) => cues.push({ pos: Math.round((s.start + cueShift) * sr), name: s.name || 'Section', length: Math.round((s.end - s.start) * sr) }));
+  for (let i = cues.length - 1; i >= 0; i--) if (cues[i].pos < 0 || cues[i].pos > len) cues.splice(i, 1);
   if (cues.length) {
     const cue = new DataView(new ArrayBuffer(4 + 24 * cues.length));
     cue.setUint32(0, cues.length, true);
